@@ -1,0 +1,84 @@
+name: invite_karoo
+description: Invite Karoo — every wedding invitation, every function, one place.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.5.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  intl: any
+  http: ^1.2.0
+  http_parser: ^4.0.2
+  flutter_secure_storage: '>=9.2.0 <11.0.0'
+  shared_preferences: ^2.3.0
+  url_launcher: ^6.3.0
+  image_picker: ^1.1.0
+  file_picker: '>=12.0.0 <13.0.0'
+  mobile_scanner: '>=7.0.0 <8.0.0'
+  qr_flutter: ^4.1.0
+  share_plus: '>=11.0.0 <14.0.0'
+  audioplayers: ^6.1.0
+  pdfrx: '>=2.0.0 <3.0.0'
+  firebase_core: '>=3.0.0 <6.0.0'
+  firebase_messaging: '>=15.0.0 <18.0.0'
+  path_provider: ^2.1.0
+
+dev_dependencies:
+  flutter_lints: '>=4.0.0 <7.0.0'
+  flutter_launcher_icons: ^0.14.0
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: assets/brand/icon.png
+  remove_alpha_ios: true
+  adaptive_icon_background: '#14082B'
+  adaptive_icon_foreground: assets/brand/icon_foreground.png
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/art/
+    - assets/photos/
+    - assets/brand/
+  fonts:
+    - family: Cinzel
+      fonts:
+        - asset: assets/fonts/Cinzel-500.ttf
+          weight: 500
+        - asset: assets/fonts/Cinzel-600.ttf
+          weight: 600
+        - asset: assets/fonts/Cinzel-700.ttf
+          weight: 700
+    - family: Cormorant
+      fonts:
+        - asset: assets/fonts/CormorantGaramond-600.ttf
+          weight: 600
+        - asset: assets/fonts/CormorantGaramond-700.ttf
+          weight: 700
+    - family: Jakarta
+      fonts:
+        - asset: assets/fonts/PlusJakartaSans-400.ttf
+          weight: 400
+        - asset: assets/fonts/PlusJakartaSans-500.ttf
+          weight: 500
+        - asset: assets/fonts/PlusJakartaSans-600.ttf
+          weight: 600
+        - asset: assets/fonts/PlusJakartaSans-700.ttf
+          weight: 700
+        - asset: assets/fonts/PlusJakartaSans-800.ttf
+          weight: 800
+    - family: DMMono
+      fonts:
+        - asset: assets/fonts/DMMono-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/DMMono-Medium.ttf
+          weight: 500
+    - family: Pinyon
+      fonts:
+        - asset: assets/fonts/PinyonScript-Regular.ttf

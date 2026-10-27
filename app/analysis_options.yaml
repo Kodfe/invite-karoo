@@ -1,0 +1,15 @@
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  errors:
+    # style hints must never fail the build; real errors still do
+    deprecated_member_use: ignore
+    unused_element: ignore
+    unused_import: warning
+
+linter:
+  rules:
+    prefer_const_constructors: false
+    prefer_const_literals_to_create_immutables: false
+    use_build_context_synchronously: false
+    no_leading_underscores_for_local_identifiers: false

@@ -1,0 +1,49 @@
+# secrets — never commit these
+.env
+*.keystore
+*.jks
+key.properties
+*.p8
+*.p12
+*.mobileprovision
+google-services.json
+GoogleService-Info.plist
+firebase-service-account*.json
+
+# node
+node_modules/
+dist/
+uploads/
+coverage/
+*.log
+*.tsbuildinfo
+
+# flutter
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+build/
+app/ios/Pods/
+app/ios/.symlinks/
+app/ios/Flutter/Flutter.framework
+app/ios/Flutter/Generated.xcconfig
+app/ios/Flutter/flutter_export_environment.sh
+app/android/.gradle/
+app/android/local.properties
+app/android/app/release/
+
+# editors / OS
+.idea/
+.vscode/
+.DS_Store
+
+# the platform folders are generated in CI (see app/tool/prepare_platforms.py)
+app/android/
+app/ios/
+app/test/
+app/.metadata
+app/linux/
+app/macos/
+app/windows/
+app/web/
