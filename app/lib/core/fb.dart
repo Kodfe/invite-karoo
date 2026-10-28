@@ -18,7 +18,7 @@ class Fb {
       if (Firebase.apps.isEmpty) {
         await Firebase.initializeApp(
           options: FirebaseOptions(
-            apiKey: Config.fbApiKey,
+            apiKey: Platform.isIOS && Config.fbIosApiKey.isNotEmpty ? Config.fbIosApiKey : Config.fbApiKey,
             appId: Platform.isIOS ? Config.fbIosAppId : Config.fbAndroidAppId,
             messagingSenderId: Config.fbSenderId,
             projectId: Config.fbProjectId,

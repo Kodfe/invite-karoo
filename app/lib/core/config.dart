@@ -7,6 +7,8 @@ class Config {
 
   /// Firebase — sign-in and push notifications. The app cannot sign in until these are set.
   static const fbApiKey = String.fromEnvironment('FIREBASE_API_KEY');
+  /// iOS has its own key in Firebase (GoogleService-Info.plist → API_KEY); falls back to the Android one
+  static const fbIosApiKey = String.fromEnvironment('FIREBASE_IOS_API_KEY');
   static const fbProjectId = String.fromEnvironment('FIREBASE_PROJECT_ID');
   static const fbSenderId = String.fromEnvironment('FIREBASE_SENDER_ID');
   static const fbAndroidAppId = String.fromEnvironment('FIREBASE_ANDROID_APP_ID');
