@@ -26,6 +26,23 @@ Demo logins (OTP is always `1234` while `DEV_OTP=1234`):
 
 Tests (needs a database called `invitekaroo_test`): `npm test`
 
+## Deploy on DigitalOcean App Platform
+
+Use a **managed PostgreSQL cluster**, not an App Platform "dev database": a dev database only grants table permissions after a first successful deploy, and this API creates its tables on start.
+
+1. **Databases → Create Database** → PostgreSQL, region **Bangalore (BLR1)**, smallest plan, name `invite-karoo-db`.
+2. **Apps → Create App** → GitHub → `Kodfe/invite-karoo`, branch `main`, source directory `/`, autodeploy on. App Platform finds the root `Dockerfile` (API + Admin Dashboard).
+3. Edit the web service: **HTTP port `3000`**, size Basic 1 GB, health check path `/v1/config/health`.
+4. **Add resource → Database → Previously created** → `invite-karoo-db`, component name `db`.
+5. Environment variables on the service (tick **Encrypt** for secrets):
+   - `DATABASE_URL` = `${db.DATABASE_URL}` · `DATABASE_CA_CERT` = `${db.CA_CERT}` · `PUBLIC_URL` = `${APP_URL}`
+   - `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `JWT_ADMIN_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `TEAM_WHATSAPP`
+   - testing only: `NODE_ENV=development`, `DEV_OTP=1234` · going live: `NODE_ENV=production`, no `DEV_OTP`, WhatsApp keys set
+6. Region Bangalore → Create. The dashboard is at `https://<app>.ondigitalocean.app/admin/`.
+
+The same setup as a spec file: `.do/app.yaml` (`doctl apps create --spec .do/app.yaml`).
+App Platform has no persistent disk, so use `STORAGE_DRIVER=firebase` for uploaded photos and cards before real use.
+
 ## Deploy on Railway
 
 1. railway.app → New Project → **Deploy from GitHub repo** → pick this repo. Leave **Root Directory** empty: the root `Dockerfile` builds the API **and** the Admin Dashboard (served at `/admin`). Setting it to `backend` deploys the API alone.

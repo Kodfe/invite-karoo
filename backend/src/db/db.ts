@@ -14,7 +14,13 @@ export const POOL_TOKEN = Symbol('PG_POOL');
 export const InjectDb = () => Inject(DB_TOKEN);
 
 export function createPool(url = env().DATABASE_URL) {
-  return new Pool({ connectionString: url, max: 10 });
+  const ca = env().DATABASE_CA_CERT;
+  if (!ca) return new Pool({ connectionString: url, max: 10 });
+  // Managed Postgres (e.g. DigitalOcean) signs with its own CA: verify against it. sslmode in the
+  // URL would override this config, so it is dropped.
+  const u = new URL(url);
+  u.searchParams.delete('sslmode');
+  return new Pool({ connectionString: u.toString(), max: 10, ssl: { ca: ca.replace(/\\n/g, '\n'), rejectUnauthorized: true } });
 }
 
 @Global()

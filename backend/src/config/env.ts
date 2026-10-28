@@ -7,6 +7,8 @@ const schema = z.object({
   CORS_ORIGINS: z.string().default('http://localhost:5173'),
 
   DATABASE_URL: z.string().min(1),
+  /** CA certificate of a managed Postgres that needs it (DigitalOcean: ${db.CA_CERT}) */
+  DATABASE_CA_CERT: z.string().default(''),
 
   JWT_ACCESS_SECRET: z.string().min(8),
   JWT_REFRESH_SECRET: z.string().min(8),
