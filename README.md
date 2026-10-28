@@ -4,7 +4,12 @@ Every wedding invitation, every function, one place.
 
 | Folder | What |
 | --- | --- |
-| `backend/` | Node.js API (NestJS + PostgreSQL). Serves the app and the Admin Dashboard. See `backend/README.md`. |
 | `app/` | Flutter app for Android and iOS — guest side and the host's wedding console. See `app/README.md`. |
-| `admin/` | Admin Dashboard (React + Vite) for the Invite Karoo team: applications, weddings, guest-list import, card & photos, support, team. The API serves it at `/admin` — deploy the repo root on Railway (root `Dockerfile` + `railway.json`) to get both. Local: `cd admin && npm i && npm run dev` (proxies the API on :3000). |
-| `.github/workflows/` | `backend.yml` runs the API tests · `admin.yml` builds the dashboard · `app.yml` builds the Android APK and uploads iOS builds to TestFlight. |
+| `functions/` | The API on **Firebase**: NestJS on Cloud Functions, Firestore, Firebase Auth, Storage, FCM. Served at **https://api.invitekaroo.com**. See `functions/README.md`. |
+| `admin/` | Admin Dashboard (Next.js, static) for the Invite Karoo team, on Firebase Hosting at **https://admin.invitekaroo.com**. Team members sign in with email + password. |
+| `firebase.json` | Hosting sites (`api` → the function, `admin` → `admin/out`), Firestore rules + indexes, Storage rules, emulators. |
+| `.github/workflows/` | `functions.yml` API tests (in-memory + Firebase emulators) · `admin.yml` builds the dashboard · `deploy.yml` deploys to Firebase · `app.yml` Android APK + TestFlight. |
+
+How sign-in works: the app asks the API for a WhatsApp code; the API checks it and returns a Firebase
+custom token; the app signs in to Firebase Auth with it and sends the Firebase ID token on every call.
+The team signs in to the dashboard with Firebase email/password accounts carrying the `ikRole` claim.
