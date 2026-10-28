@@ -14,6 +14,9 @@ on:
         type: boolean
         default: true
 
+permissions:
+  contents: write   # only to save build logs on the ci-logs-* branches
+
 concurrency:
   group: app-${{ github.ref }}
   cancel-in-progress: true
@@ -40,9 +43,9 @@ jobs:
       run:
         working-directory: app
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -62,7 +65,10 @@ jobs:
           dart run flutter_launcher_icons
 
       - name: Check the code
-        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          flutter analyze --no-fatal-infos --no-fatal-warnings 2>&1 | tee ../ci-analyze.txt
 
       - name: Release signing key (optional)
         env:
@@ -88,8 +94,9 @@ jobs:
           VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: *//; s/+.*//')
           DEFINES+=("--dart-define=APP_VERSION=$VERSION")
           if [ -z "$API_URL" ]; then echo "::warning::Repository variable API_URL is not set — the app will try http://10.0.2.2:3000 (the Android emulator's localhost)."; fi
-          flutter build apk --release --build-number=${{ github.run_number }} "${DEFINES[@]}"
-          if [ -f android/key.properties ]; then flutter build appbundle --release --build-number=${{ github.run_number }} "${DEFINES[@]}"; fi
+          set -o pipefail
+          flutter build apk --release --build-number=${{ github.run_number }} "${DEFINES[@]}" 2>&1 | tee ../ci-build.txt
+          if [ -f android/key.properties ]; then flutter build appbundle --release --build-number=${{ github.run_number }} "${DEFINES[@]}" 2>&1 | tee -a ../ci-build.txt; fi
           cp build/app/outputs/flutter-apk/app-release.apk "build/invite-karoo-$VERSION-${{ github.run_number }}.apk"
 
       - uses: actions/upload-artifact@v4
@@ -100,6 +107,16 @@ jobs:
             app/build/app/outputs/bundle/release/app-release.aab
           if-no-files-found: error
           retention-days: 30
+
+      - name: Save the logs for review
+        if: always()
+        working-directory: .
+        run: |
+          mkdir -p "$RUNNER_TEMP/logs" && cp ci-*.txt "$RUNNER_TEMP/logs/" 2>/dev/null || true
+          echo "run ${{ github.run_number }} · ${{ github.sha }} · ${{ job.status }}" > "$RUNNER_TEMP/logs/STATUS.txt"
+          cd "$RUNNER_TEMP/logs" && git init -q -b logs && git config user.name ci && git config user.email ci@invitekaroo.local
+          git add -A && git commit -qm "Build logs, run ${{ github.run_number }}"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" logs:ci-logs-${{ github.job }}
 
   ios:
     name: iOS → TestFlight
@@ -115,7 +132,7 @@ jobs:
       ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
       ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Check the Apple secrets
         run: |
@@ -161,11 +178,13 @@ jobs:
           done
           VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: *//; s/+.*//')
           DEFINES+=("--dart-define=APP_VERSION=$VERSION")
-          flutter build ios --release --config-only --no-codesign --build-number=${{ github.run_number }} "${DEFINES[@]}"
-          cd ios && pod install --repo-update
+          set -o pipefail
+          flutter build ios --release --config-only --no-codesign --build-number=${{ github.run_number }} "${DEFINES[@]}" 2>&1 | tee ../ci-ios-prepare.txt
+          cd ios && pod install --repo-update 2>&1 | tee -a ../../ci-ios-prepare.txt
 
       - name: Archive
         run: |
+          set -o pipefail
           cd ios
           xcodebuild -workspace Runner.xcworkspace -scheme Runner -configuration Release \
             -destination 'generic/platform=iOS' \
@@ -173,7 +192,8 @@ jobs:
             -allowProvisioningUpdates \
             -authenticationKeyPath "$ASC_KEY_PATH" -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
             DEVELOPMENT_TEAM="$TEAM_ID" CODE_SIGN_STYLE=Automatic \
-            archive | tail -n 60
+            archive > ../../ci-ios-archive.txt 2>&1 || { grep -E "error:|warning: .*signing|Provisioning|BUILD FAILED" ../../ci-ios-archive.txt | head -80; tail -n 80 ../../ci-ios-archive.txt; exit 1; }
+          tail -n 20 ../../ci-ios-archive.txt
 
       - name: Upload to TestFlight
         run: |
@@ -189,10 +209,21 @@ jobs:
             <key>manageAppVersionAndBuildNumber</key><false/>
           </dict></plist>
           EOF
+          set -o pipefail
           xcodebuild -exportArchive \
             -archivePath "$RUNNER_TEMP/Runner.xcarchive" \
             -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
             -exportPath "$RUNNER_TEMP/export" \
             -allowProvisioningUpdates \
-            -authenticationKeyPath "$ASC_KEY_PATH" -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+            -authenticationKeyPath "$ASC_KEY_PATH" -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" 2>&1 | tee ../ci-ios-upload.txt
           echo "Uploaded build ${{ github.run_number }}. It appears in App Store Connect → TestFlight after Apple finishes processing (usually 10–30 minutes)."
+
+      - name: Save the logs for review
+        if: always()
+        working-directory: .
+        run: |
+          mkdir -p "$RUNNER_TEMP/logs" && cp ci-*.txt "$RUNNER_TEMP/logs/" 2>/dev/null || true
+          echo "run ${{ github.run_number }} · ${{ github.sha }} · ${{ job.status }}" > "$RUNNER_TEMP/logs/STATUS.txt"
+          cd "$RUNNER_TEMP/logs" && git init -q -b logs && git config user.name ci && git config user.email ci@invitekaroo.local
+          git add -A && git commit -qm "Build logs, run ${{ github.run_number }}"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" logs:ci-logs-${{ github.job }}
