@@ -1,13 +1,13 @@
-import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post, Query, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { and, asc, eq, gte, isNull, lt } from 'drizzle-orm';
 import { z } from 'zod';
 import { CurrentUser, UserClaims, UserGuard } from '../../common/auth';
 import { AppError, notFound } from '../../common/errors';
-import { Zod, zDate, zTime } from '../../common/zod';
-import { DB, InjectDb } from '../../db/db';
-import { aiScans, personalEvents } from '../../db/schema';
+import { Zod, zDate, zTime, IdPipe } from '../../common/zod';
+import { col } from '../../db/paths';
+import { PersonalEvent } from '../../db/models';
+import { F, getDoc, getRows } from '../../db/store';
 import { StorageService } from '../infra/storage.service';
 import { AiScanService } from './ai-scan.service';
 
@@ -42,12 +42,11 @@ const Range = z.object({ from: zDate, to: zDate });
 @Controller('v1/events')
 export class EventsController {
   constructor(
-    @InjectDb() private readonly db: DB,
     private readonly ai: AiScanService,
     private readonly storage: StorageService,
   ) {}
 
-  private view(e: typeof personalEvents.$inferSelect) {
+  private view(e: PersonalEvent) {
     return {
       id: e.id,
       title: e.title,
@@ -68,32 +67,34 @@ export class EventsController {
     };
   }
 
+  /** the user's events, by date and time */
+  private async live(userId: string) {
+    const rows = await getRows<PersonalEvent>(col.events(userId).where('deletedAt', '==', null));
+    return rows.sort((a, b) => a.date.localeCompare(b.date) || (a.time ?? '').localeCompare(b.time ?? ''));
+  }
+
+  private async mine(userId: string, id: string) {
+    const e = await getDoc<PersonalEvent>(col.events(userId).doc(id));
+    if (!e || e.deletedAt) throw notFound('Event');
+    return e;
+  }
+
   @Get()
   async list(@CurrentUser() u: UserClaims, @Query(new Zod(Range)) q: z.infer<typeof Range>) {
-    const rows = await this.db
-      .select()
-      .from(personalEvents)
-      .where(and(eq(personalEvents.userId, u.sub), isNull(personalEvents.deletedAt), gte(personalEvents.date, q.from), lt(personalEvents.date, q.to)))
-      .orderBy(asc(personalEvents.date), asc(personalEvents.time));
+    const rows = (await this.live(u.sub)).filter((e) => e.date >= q.from && e.date < q.to);
     return rows.map((r) => this.view(r));
   }
 
   /** every event, newest first — the Event log screen */
   @Get('log')
   async log(@CurrentUser() u: UserClaims) {
-    const rows = await this.db
-      .select()
-      .from(personalEvents)
-      .where(and(eq(personalEvents.userId, u.sub), isNull(personalEvents.deletedAt)))
-      .orderBy(asc(personalEvents.date));
-    return rows.map((r) => this.view(r));
+    return (await this.live(u.sub)).map((r) => this.view(r));
   }
 
   @Post()
   async create(@CurrentUser() u: UserClaims, @Body(new Zod(EventIn)) b: z.infer<typeof EventIn>) {
-    const [row] = await this.db
-      .insert(personalEvents)
-      .values({
+    const ref = col.events(u.sub).doc();
+    await ref.set({
         userId: u.sub,
         title: b.title,
         type: b.type,
@@ -105,34 +106,29 @@ export class EventsController {
         icon: b.icon,
         source: b.source,
         reminders: b.reminders,
+        imageUrl: null,
         ownWedding: b.type === 'Wedding' && b.functions?.length ? { functions: b.functions.map((f) => ({ ...f, time: f.time || '' })) } : null,
-      })
-      .returning();
-    return this.view(row);
+        createdAt: F.now(),
+        updatedAt: F.now(),
+        deletedAt: null,
+      });
+    return this.view((await getDoc<PersonalEvent>(ref))!);
   }
 
   @Patch(':id')
-  async update(@CurrentUser() u: UserClaims, @Param('id', ParseUUIDPipe) id: string, @Body(new Zod(EventIn.partial())) b: Partial<z.infer<typeof EventIn>>) {
+  async update(@CurrentUser() u: UserClaims, @Param('id', IdPipe) id: string, @Body(new Zod(EventIn.partial())) b: Partial<z.infer<typeof EventIn>>) {
     const { functions, ...rest } = b;
-    const set: Partial<typeof personalEvents.$inferInsert> = { ...rest, updatedAt: new Date() };
+    await this.mine(u.sub, id);
+    const set: Record<string, unknown> = { ...rest, updatedAt: F.now() };
     if (functions) set.ownWedding = functions.length ? { functions: functions.map((f) => ({ ...f, time: f.time || '' })) } : null;
-    const [row] = await this.db
-      .update(personalEvents)
-      .set(set)
-      .where(and(eq(personalEvents.id, id), eq(personalEvents.userId, u.sub), isNull(personalEvents.deletedAt)))
-      .returning();
-    if (!row) throw notFound('Event');
-    return this.view(row);
+    await col.events(u.sub).doc(id).update(set);
+    return this.view(await this.mine(u.sub, id));
   }
 
   @Delete(':id')
-  async remove(@CurrentUser() u: UserClaims, @Param('id', ParseUUIDPipe) id: string) {
-    const [row] = await this.db
-      .update(personalEvents)
-      .set({ deletedAt: new Date() })
-      .where(and(eq(personalEvents.id, id), eq(personalEvents.userId, u.sub), isNull(personalEvents.deletedAt)))
-      .returning();
-    if (!row) throw notFound('Event');
+  async remove(@CurrentUser() u: UserClaims, @Param('id', IdPipe) id: string) {
+    await this.mine(u.sub, id);
+    await col.events(u.sub).doc(id).update({ deletedAt: F.now() });
     return { ok: true };
   }
 
@@ -145,10 +141,10 @@ export class EventsController {
     try {
       const result = await this.ai.scan(file);
       const s = await this.storage.put(`scans/${u.sub}`, file);
-      await this.db.insert(aiScans).values({ userId: u.sub, imageKey: s.key, status: 'done', result });
+      await col.aiScans(u.sub).doc().set({ userId: u.sub, imageKey: s.key, status: 'done', result, error: null, createdAt: F.now() });
       return result;
     } catch (e) {
-      await this.db.insert(aiScans).values({ userId: u.sub, imageKey: '', status: 'failed', error: (e as Error).message });
+      await col.aiScans(u.sub).doc().set({ userId: u.sub, imageKey: '', status: 'failed', result: null, error: (e as Error).message, createdAt: F.now() });
       throw e;
     }
   }

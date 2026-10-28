@@ -1,14 +1,15 @@
 import { INestApplication } from '@nestjs/common';
-import { Pool } from 'pg';
 import request from 'supertest';
 import ExcelJS from 'exceljs';
-import { bearer, boot, signIn, TEST_DB } from './setup';
+import { bearer, boot, idTokenFromCustom, passwordSignIn, signIn } from './setup';
+import { col } from '../src/db/paths';
+import { getDoc } from '../src/db/store';
+import { Fn } from '../src/db/models';
 
 /* One wedding, built the way the team will build it, then run from both sides. */
 
 let app: INestApplication;
 let http: ReturnType<typeof request>;
-let pool: Pool;
 let adminToken: string;
 
 const OWNER = '9864455120';
@@ -18,7 +19,7 @@ const STRANGER = '9810000099';
 
 let owner: { token: string; me?: { host?: { access: string } } };
 let cohost: { token: string };
-let guest: { token: string; refresh: string };
+let guest: { token: string };
 let stranger: { token: string };
 let weddingId: string;
 const fn: Record<string, string> = {};
@@ -38,13 +39,9 @@ async function sheet(rows: (string | number)[][], functions?: (string | number)[
 beforeAll(async () => {
   app = await boot();
   http = request(app.getHttpServer());
-  pool = new Pool({ connectionString: TEST_DB });
-  const { hashPassword } = await import('../src/common/crypto');
-  await pool.query(`insert into admin_users (email, name, role, password_hash) values ('a@ik.test', 'Admin', 'admin', $1)`, [await hashPassword('password-123')]);
 });
 
 afterAll(async () => {
-  await pool.end();
   await app.close();
 });
 
@@ -74,12 +71,11 @@ describe('auth', () => {
     expect(r.body.error.fields.mobile).toBeDefined();
   });
 
-  it('rotates refresh tokens', async () => {
+  it('signs in to Firebase with the custom token, and the ID token opens the API', async () => {
     guest = await signIn(app, GUEST, { firstName: 'Mitesh', familyName: 'Taleda', city: 'Guwahati' });
-    const r = await http.post('/v1/auth/refresh').send({ refreshToken: guest.refresh }).expect(200);
-    expect(r.body.accessToken).toBeTruthy();
-    await http.post('/v1/auth/refresh').send({ refreshToken: guest.refresh }).expect(401);
-    guest.refresh = r.body.refreshToken;
+    const me = await http.get('/v1/me').set(bearer(guest.token)).expect(200);
+    expect(me.body.phone).toBe('+919810000001');
+
   });
 
   it('needs a token for private routes', async () => {
@@ -90,11 +86,15 @@ describe('auth', () => {
 
 describe('admin builds the wedding', () => {
   it('logs in', async () => {
-    await http.post('/v1/admin/auth/login').send({ email: 'a@ik.test', password: 'wrong' }).expect(401);
-    const r = await http.post('/v1/admin/auth/login').send({ email: 'a@ik.test', password: 'password-123' }).expect(200);
-    adminToken = r.body.token;
-    // a user token is not an admin token
-    await http.get('/v1/admin/stats').set(bearer(guest.token)).expect(401);
+    await expect(passwordSignIn('a@ik.test', 'wrong')).rejects.toThrow();
+    adminToken = await passwordSignIn('a@ik.test', 'password-123');
+    const me = await http.get('/v1/admin/me').set(bearer(adminToken)).expect(200);
+    expect(me.body).toMatchObject({ email: 'a@ik.test', role: 'admin' });
+    // an app user's token is not a team token
+    const no = await http.get('/v1/admin/stats').set(bearer(guest.token)).expect(403);
+    expect(no.body.error.code).toBe('NOT_TEAM');
+    // and a team token is not an app user's token
+    await http.get('/v1/me').set(bearer(adminToken)).expect(401);
   });
 
   it('creates the wedding and its functions', async () => {
@@ -144,8 +144,8 @@ describe('admin builds the wedding', () => {
     expect(dry.body.report.badRows.join(' ')).toMatch(/duplicate of row 2/);
     expect(dry.body.functionsCreated).toEqual(['Reception']);
     expect(dry.body.added).toBe(22);
-    const before = await pool.query('select count(*)::int n from guests');
-    expect(before.rows[0].n).toBe(0);
+    const before = await col.guests(weddingId).count().get();
+    expect(before.data().count).toBe(0);
 
     const real = await http.post(`/v1/admin/weddings/${weddingId}/guests/import?dryRun=false`).set(bearer(adminToken)).attach('file', buf, 'guests.xlsx').expect(201);
     expect(real.body.added).toBe(22);
@@ -214,16 +214,16 @@ describe('guest side', () => {
   });
 
   it('closes replies 24h before start, and never opens them for a late function', async () => {
-    await pool.query(`update functions set starts_at = now() + interval '20 hours', created_at = now() - interval '10 days' where id = $1`, [fn.sangeet]);
+    await col.functions(weddingId).doc(fn.sangeet).update({ startsAt: new Date(Date.now() + 20 * 3600_000), createdAt: new Date(Date.now() - 10 * 86400_000) });
     const closed = await http.post(`/v1/weddings/${weddingId}/functions/${fn.sangeet}/rsvp`).set(bearer(guest.token)).send({ rsvp: 'not_going' }).expect(409);
     expect(closed.body.error.code).toBe('RSVP_CLOSED');
     const f = await http.get(`/v1/weddings/${weddingId}/functions/${fn.sangeet}`).set(bearer(guest.token)).expect(200);
     expect(f.body.window.state).toBe('closed');
     expect(f.body.rsvp).toBe('going'); // the last answer stays
-    await pool.query(`update functions set created_at = now() where id = $1`, [fn.sangeet]);
+    await col.functions(weddingId).doc(fn.sangeet).update({ createdAt: new Date() });
     const never = await http.post(`/v1/weddings/${weddingId}/functions/${fn.sangeet}/rsvp`).set(bearer(guest.token)).send({ rsvp: 'going', pax: 1 }).expect(409);
     expect(never.body.error.code).toBe('RSVP_NEVER');
-    await pool.query(`update functions set starts_at = now() + interval '5 days', created_at = now() - interval '10 days' where id = $1`, [fn.sangeet]);
+    await col.functions(weddingId).doc(fn.sangeet).update({ startsAt: new Date(Date.now() + 5 * 86400_000), createdAt: new Date(Date.now() - 10 * 86400_000) });
   });
 
   it('keeps private reminders on the invite row', async () => {
@@ -323,8 +323,8 @@ describe('host console', () => {
     expect(inv.body.weddings).toHaveLength(0);
     const n = await http.get('/v1/notifications').set(bearer(other.token)).expect(200);
     expect(n.body.items[0].title).toMatch(/taken off a guest list/);
-    const wa = await pool.query(`select count(*)::int n from message_log where "to" = '+919820000002'`);
-    expect(wa.rows[0].n).toBe(0);
+    const wa = await col.messageLog().where('to', '==', '+919820000002').count().get();
+    expect(wa.data().count).toBe(0);
     await http.post(`/v1/host/weddings/${weddingId}/guests/${gid}/restore`).set(bearer(owner.token)).expect(200);
     const back = await http.get('/v1/invitations').set(bearer(other.token)).expect(200);
     expect(back.body.weddings).toHaveLength(1);
@@ -340,8 +340,8 @@ describe('host console', () => {
     expect(b.body.id).toBe(a.body.id);
     const c = await http.post(`/v1/host/weddings/${weddingId}/functions/${fn.wedding}/blasts`).set(bearer(cohost.token)).send({ kind: 'rsvp_request', idempotencyKey: 'inv-wedding-2' }).expect(409);
     expect(c.body.error.code).toBe('ALREADY_SENT');
-    const sent = await pool.query(`select count(*)::int n from message_log where related_type = 'blast' and status = 'sent'`);
-    expect(sent.rows[0].n).toBe(22);
+    const sent = await col.messageLog().where('relatedType', '==', 'blast').where('status', '==', 'sent').count().get();
+    expect(sent.data().count).toBe(22);
     const n = await http.get('/v1/notifications?cat=inv').set(bearer(guest.token)).expect(200);
     expect(n.body.items[0].action).toMatchObject({ type: 'function', functionId: fn.wedding });
     const home = await http.get(`/v1/host/weddings/${weddingId}`).set(bearer(owner.token)).expect(200);
@@ -409,12 +409,11 @@ describe('changes, reminders and the rest', () => {
   it('fires each reminder once, and again after the function moves', async () => {
     const { RemindersService } = await import('../src/modules/reminders/reminders.service');
     const svc = app.get(RemindersService);
-    const { rows } = await pool.query(`select starts_at from functions where id = $1`, [fn.reception]);
-    const start = new Date(rows[0].starts_at);
+    const start = (await getDoc<Fn>(col.functions(weddingId).doc(fn.reception)))!.startsAt;
     const at = new Date(start.getTime() - 45 * 60_000 + 30_000); // the guest's own 45-minute reminder
     expect(await svc.tick(at)).toBeGreaterThanOrEqual(1);
     expect(await svc.tick(at)).toBe(0);
-    await pool.query(`update functions set starts_at = starts_at + interval '1 hour' where id = $1`, [fn.reception]);
+    await col.functions(weddingId).doc(fn.reception).update({ startsAt: new Date(start.getTime() + 3600_000) });
     expect(await svc.tick(new Date(at.getTime() + 3600_000))).toBeGreaterThanOrEqual(1);
   });
 
@@ -492,6 +491,10 @@ describe('changes, reminders and the rest', () => {
     await http.post('/v1/me/phone/request').set(bearer(guest.token)).send({ mobile: '9810000444' }).expect(200);
     const ch = await http.post('/v1/me/phone/verify').set(bearer(guest.token)).send({ mobile: '9810000444', code: '1234' }).expect(200);
     expect(ch.body.phone).toBe('+919810000444');
+    // the new number is in the new sign-in token
+    const again = await idTokenFromCustom(ch.body.customToken);
+    const me2 = await http.get('/v1/me').set(bearer(again)).expect(200);
+    expect(me2.body.phone).toBe('+919810000444');
     await http.delete('/v1/me').set(bearer(stranger.token)).send({}).expect(422);
     await http.delete('/v1/me').set(bearer(stranger.token)).send({ confirm: 'DELETE' }).expect(200);
     await http.get('/v1/me').set(bearer(stranger.token)).expect(404);

@@ -47,3 +47,10 @@ app/linux/
 app/macos/
 app/windows/
 app/web/
+
+# firebase
+.firebase/
+firebase-debug*.log
+firestore-debug.log
+ui-debug.log
+.runtimeconfig.json

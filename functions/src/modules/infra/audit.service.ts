@@ -1,18 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import { DB, DbOrTx, InjectDb } from '../../db/db';
-import { auditLog } from '../../db/schema';
+import { col } from '../../db/paths';
+import { F } from '../../db/store';
 
 @Injectable()
 export class AuditService {
-  constructor(@InjectDb() private readonly db: DB) {}
-
-  async log(
-    actor: { type: 'user' | 'admin' | 'system'; id?: string | null },
-    action: string,
-    weddingId: string | null,
-    data?: Record<string, unknown>,
-    db: DbOrTx = this.db,
-  ) {
-    await db.insert(auditLog).values({ actorType: actor.type, actorId: actor.id ?? null, action, weddingId, data });
+  async log(actor: { type: 'user' | 'admin' | 'system'; id?: string | null }, action: string, weddingId: string | null, data?: Record<string, unknown>) {
+    await col.auditLog().doc().set({ actorType: actor.type, actorId: actor.id ?? null, action, weddingId, data: data ?? null, createdAt: F.now() });
   }
 }

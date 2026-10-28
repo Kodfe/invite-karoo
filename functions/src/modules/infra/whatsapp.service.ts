@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { env } from '../../config/env';
-import { DbOrTx, InjectDb, DB } from '../../db/db';
-import { messageLog } from '../../db/schema';
+import { col } from '../../db/paths';
+import { F } from '../../db/store';
 
 export type WaTemplate = 'otp' | 'invite' | 'reminder';
 
@@ -23,8 +23,6 @@ export class WhatsappService {
   /** the last messages sent in console mode — tests read this */
   readonly outbox: { to: string; template: WaTemplate; params: string[] }[] = [];
 
-  constructor(@InjectDb() private readonly db: DB) {}
-
   private templateName(t: WaTemplate) {
     const e = env();
     return t === 'otp' ? e.WA_TEMPLATE_OTP : t === 'invite' ? e.WA_TEMPLATE_INVITE : e.WA_TEMPLATE_REMINDER;
@@ -35,7 +33,6 @@ export class WhatsappService {
     template: WaTemplate,
     params: string[],
     related?: { type: string; id: string },
-    db: DbOrTx = this.db,
   ): Promise<WaResult> {
     const e = env();
     let res: WaResult;
@@ -47,15 +44,16 @@ export class WhatsappService {
     } else {
       res = await this.sendMeta(to, template, params);
     }
-    await db.insert(messageLog).values({
+    await col.messageLog().doc().set({
       channel: 'whatsapp',
       to,
       template: this.templateName(template),
       status: res.ok ? 'sent' : 'failed',
-      providerId: res.providerId,
-      error: res.error,
-      relatedType: related?.type,
-      relatedId: related?.id,
+      providerId: res.providerId ?? null,
+      error: res.error ?? null,
+      relatedType: related?.type ?? null,
+      relatedId: related?.id ?? null,
+      createdAt: F.now(),
     });
     return res;
   }

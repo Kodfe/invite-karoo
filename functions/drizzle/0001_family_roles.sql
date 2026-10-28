@@ -1,1 +1,0 @@
-ALTER TYPE "public"."access_role" ADD VALUE 'giftdesk';

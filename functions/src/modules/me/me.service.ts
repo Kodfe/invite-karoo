@@ -1,23 +1,11 @@
 import { Injectable } from '@nestjs/common';
-import { and, count, desc, eq, inArray, isNotNull, isNull, ne, or } from 'drizzle-orm';
-import { DB, InjectDb } from '../../db/db';
-import {
-  devices,
-  guests,
-  hostApplications,
-  invites,
-  notifications,
-  personalEvents,
-  sessions,
-  tickets,
-  UserPrefs,
-  UserPrivacy,
-  users,
-  weddingAccess,
-  weddings,
-} from '../../db/schema';
+import { auth } from '../../common/firebase-auth';
 import { notFound } from '../../common/errors';
+import { sha256 } from '../../common/crypto';
 import { prettyPhone, splitE164 } from '../../common/phone';
+import { col, group } from '../../db/paths';
+import { Access, Application, Guest, Invite, Ticket, User, UserPrefs, UserPrivacy, Wedding } from '../../db/models';
+import { byIds, db, F, getDoc, getRows, rows } from '../../db/store';
 
 export type HostingRow = {
   weddingId: string;
@@ -29,31 +17,27 @@ export type HostingRow = {
   city: string;
 };
 
+/** the active guest-list rows for a number, across every wedding */
+export async function guestRowsForPhone(phone: string) {
+  return getRows<Guest>(group.guests().where('phone', '==', phone).where('active', '==', true));
+}
+
 @Injectable()
 export class MeService {
-  constructor(@InjectDb() private readonly db: DB) {}
-
   async user(userId: string) {
-    const [u] = await this.db.select().from(users).where(and(eq(users.id, userId), isNull(users.deletedAt))).limit(1);
-    if (!u) throw notFound('Account');
+    const u = await getDoc<User>(col.users().doc(userId));
+    if (!u || u.deletedAt) throw notFound('Account');
     return u;
   }
 
   /** weddings this number runs the console for — owner or family access, handed over by the team */
   async hosting(phone: string): Promise<HostingRow[]> {
-    const owned = await this.db
-      .select()
-      .from(weddings)
-      .where(and(eq(weddings.ownerPhone, phone), isNotNull(weddings.handedOverAt), ne(weddings.status, 'draft')));
-    const access = await this.db
-      .select({ w: weddings, role: weddingAccess.role })
-      .from(weddingAccess)
-      .innerJoin(weddings, eq(weddings.id, weddingAccess.weddingId))
-      .where(
-        and(eq(weddingAccess.phone, phone), isNull(weddingAccess.removedAt), isNotNull(weddings.handedOverAt), ne(weddings.status, 'draft')),
-      );
+    const live = (w: Wedding) => !!w.handedOverAt && w.status !== 'draft';
+    const owned = (await getRows<Wedding>(col.weddings().where('ownerPhone', '==', phone))).filter(live);
+    const access = await getRows<Access>(group.access().where('phone', '==', phone).where('removedAt', '==', null));
+    const accessWeddings = await byIds<Wedding>(col.weddings(), access.map((a) => a.weddingId));
     const out = new Map<string, HostingRow>();
-    const row = (w: typeof weddings.$inferSelect, role: HostingRow['role']): HostingRow => ({
+    const row = (w: Wedding, role: HostingRow['role']): HostingRow => ({
       weddingId: w.id,
       couple: `${w.bride.name.split(' ')[0]} & ${w.groom.name.split(' ')[0]}`,
       role,
@@ -63,43 +47,42 @@ export class MeService {
       city: w.city,
     });
     for (const w of owned) out.set(w.id, row(w, 'owner'));
-    for (const { w, role } of access) if (!out.has(w.id)) out.set(w.id, row(w, role));
+    for (const a of access) {
+      const w = accessWeddings.get(a.weddingId);
+      if (w && live(w) && !out.has(w.id)) out.set(w.id, row(w, a.role));
+    }
     return [...out.values()].sort((a, b) => a.startDate.localeCompare(b.startDate));
   }
 
   /** 'none' never applied · 'pending' applied, under review · 'granted' a console is live */
   async hostAccess(userId: string, phone: string, hosting: HostingRow[]) {
     if (hosting.length) return 'granted' as const;
-    const [app] = await this.db
-      .select({ id: hostApplications.id })
-      .from(hostApplications)
-      .where(
-        and(
-          or(eq(hostApplications.userId, userId), eq(hostApplications.phone, phone)),
-          inArray(hostApplications.status, ['new', 'in_setup']),
-        ),
-      )
-      .limit(1);
-    return app ? ('pending' as const) : ('none' as const);
+    const [byUser, byPhone] = await Promise.all([
+      getRows<Application>(col.applications().where('userId', '==', userId)),
+      getRows<Application>(col.applications().where('phone', '==', phone)),
+    ]);
+    const pending = [...byUser, ...byPhone].some((a) => a.status === 'new' || a.status === 'in_setup');
+    return pending ? ('pending' as const) : ('none' as const);
+  }
+
+  /** how many functions this number is invited to, across every wedding */
+  async invitedCount(phone: string) {
+    const gs = await guestRowsForPhone(phone);
+    const counts = await Promise.all(
+      gs.map(async (g) => (await col.invites(g.weddingId).where('guestId', '==', g.id).where('invited', '==', true).count().get()).data().count),
+    );
+    return counts.reduce((a, b) => a + b, 0);
   }
 
   async me(userId: string) {
     const u = await this.user(userId);
     const hosting = await this.hosting(u.phone);
     const access = await this.hostAccess(u.id, u.phone, hosting);
-    const [{ n: unread }] = await this.db
-      .select({ n: count() })
-      .from(notifications)
-      .where(and(eq(notifications.userId, u.id), eq(notifications.read, false)));
-    const [{ n: invitedTo }] = await this.db
-      .select({ n: count() })
-      .from(invites)
-      .innerJoin(guests, eq(guests.id, invites.guestId))
-      .where(and(eq(guests.phone, u.phone), eq(guests.active, true), eq(invites.invited, true)));
-    const [{ n: events }] = await this.db
-      .select({ n: count() })
-      .from(personalEvents)
-      .where(and(eq(personalEvents.userId, u.id), isNull(personalEvents.deletedAt)));
+    const [unread, invitedTo, events] = await Promise.all([
+      col.notifications(u.id).where('read', '==', false).count().get().then((r) => r.data().count),
+      this.invitedCount(u.phone),
+      col.events(u.id).where('deletedAt', '==', null).count().get().then((r) => r.data().count),
+    ]);
     const { cc, mobile } = splitE164(u.phone);
     return {
       id: u.id,
@@ -122,66 +105,76 @@ export class MeService {
   }
 
   async updateProfile(userId: string, p: Partial<{ firstName: string; familyName: string; city: string; email: string | null; lang: 'en' | 'hi' | 'ta' | 'gu'; photoUrl: string | null }>) {
-    await this.db.update(users).set({ ...p, updatedAt: new Date() }).where(eq(users.id, userId));
+    await col.users().doc(userId).update({ ...p, updatedAt: F.now() });
     return this.me(userId);
   }
 
   async updatePrefs(userId: string, patch: Partial<UserPrefs>) {
     const u = await this.user(userId);
     const prefs = { ...u.prefs, ...patch };
-    await this.db.update(users).set({ prefs, updatedAt: new Date() }).where(eq(users.id, userId));
+    await col.users().doc(userId).update({ prefs, updatedAt: F.now() });
     return prefs;
   }
 
   async updatePrivacy(userId: string, patch: Partial<UserPrivacy>) {
     const u = await this.user(userId);
     const privacy = { ...u.privacy, ...patch };
-    await this.db.update(users).set({ privacy, updatedAt: new Date() }).where(eq(users.id, userId));
+    await col.users().doc(userId).update({ privacy, updatedAt: F.now() });
     return privacy;
   }
 
   async registerDevice(userId: string, fcmToken: string, platform: string) {
-    await this.db
-      .insert(devices)
-      .values({ userId, fcmToken, platform })
-      .onConflictDoUpdate({ target: devices.fcmToken, set: { userId, platform, updatedAt: new Date() } });
+    const key = sha256(fcmToken).slice(0, 40);
+    // a token belongs to one account: the last one to register it
+    const others = await getRows<{ userId: string }>(group.devices().where('fcmToken', '==', fcmToken));
+    const b = db().batch();
+    for (const o of others) if (o.userId !== userId) b.delete(col.devices(o.userId).doc(o.id));
+    b.set(col.devices(userId).doc(key), { userId, fcmToken, platform, updatedAt: F.now() });
+    await b.commit();
     return { ok: true };
   }
 
   async removeDevice(userId: string, fcmToken: string) {
-    await this.db.delete(devices).where(and(eq(devices.userId, userId), eq(devices.fcmToken, fcmToken)));
+    await col.devices(userId).doc(sha256(fcmToken).slice(0, 40)).delete();
     return { ok: true };
   }
 
+  /** moves the account to a new number (the caller has checked the number is free and confirmed by code) */
   async changePhone(userId: string, phone: string) {
-    await this.db.update(users).set({ phone, updatedAt: new Date() }).where(eq(users.id, userId));
-    // every old session ends: the number is the identity
-    await this.db.update(sessions).set({ revokedAt: new Date() }).where(eq(sessions.userId, userId));
-    return this.me(userId);
+    const u = await this.user(userId);
+    await db().runTransaction(async (tx) => {
+      const taken = await tx.get(col.phones().doc(phone));
+      if (taken.exists && (taken.data() as { uid: string }).uid !== userId) throw new Error('number taken');
+      tx.delete(col.phones().doc(u.phone));
+      tx.set(col.phones().doc(phone), { uid: userId });
+      tx.update(col.users().doc(userId), { phone, updatedAt: F.now() });
+    });
+    // every old sign-in ends: the number is the identity
+    await auth().revoke(userId);
+    return { me: await this.me(userId), customToken: await auth().createCustomToken(userId, { phone }) };
   }
 
   /** everything we hold about this person, as one JSON document */
   async export(userId: string) {
     const u = await this.user(userId);
-    const myInvites = await this.db
-      .select({ invite: invites, guest: guests })
-      .from(invites)
-      .innerJoin(guests, eq(guests.id, invites.guestId))
-      .where(eq(guests.phone, u.phone));
-    const ev = await this.db.select().from(personalEvents).where(eq(personalEvents.userId, userId));
-    const notifs = await this.db.select().from(notifications).where(eq(notifications.userId, userId)).orderBy(desc(notifications.createdAt));
-    const tk = await this.db.select().from(tickets).where(eq(tickets.userId, userId));
+    const gs = await getRows<Guest>(group.guests().where('phone', '==', u.phone));
+    const myInvites = (
+      await Promise.all(gs.map(async (g) => (await getRows<Invite>(col.invites(g.weddingId).where('guestId', '==', g.id))).map((i) => ({ i, g }))))
+    ).flat();
+    const ev = await getRows(col.events(userId));
+    const notifs = await getRows(col.notifications(userId).orderBy('createdAt', 'desc'));
+    const tk = await getRows<Ticket>(col.tickets().where('userId', '==', userId));
     return {
       exportedAt: new Date().toISOString(),
       account: { ...u },
-      invitations: myInvites.map(({ invite, guest }) => ({
-        weddingId: invite.weddingId,
-        functionId: invite.functionId,
-        nameOnList: guest.name,
-        rsvp: invite.rsvp,
-        pax: invite.pax,
-        respondedAt: invite.respondedAt,
-        myReminders: invite.guestReminders,
+      invitations: myInvites.map(({ i, g }) => ({
+        weddingId: i.weddingId,
+        functionId: i.functionId,
+        nameOnList: g.name,
+        rsvp: i.rsvp,
+        pax: i.pax,
+        respondedAt: i.respondedAt,
+        myReminders: i.guestReminders,
       })),
       ownEvents: ev,
       notifications: notifs,
@@ -194,24 +187,25 @@ export class MeService {
    * but nothing links them to this person any more once the account is gone.
    */
   async deleteAccount(userId: string) {
-    await this.db.transaction(async (tx) => {
-      await tx.delete(devices).where(eq(devices.userId, userId));
-      await tx.update(sessions).set({ revokedAt: new Date() }).where(eq(sessions.userId, userId));
-      await tx.delete(personalEvents).where(eq(personalEvents.userId, userId));
-      await tx.delete(notifications).where(eq(notifications.userId, userId));
-      await tx
-        .update(users)
-        .set({
-          deletedAt: new Date(),
-          firstName: 'Deleted',
-          familyName: 'User',
-          city: '',
-          email: null,
-          photoUrl: null,
-          phone: `deleted:${userId}`,
-        })
-        .where(eq(users.id, userId));
+    const u = await this.user(userId);
+    for (const c of [col.devices(userId), col.events(userId), col.notifications(userId), col.aiScans(userId)]) await db().recursiveDelete(c);
+    const b = db().batch();
+    b.delete(col.phones().doc(u.phone));
+    b.update(col.users().doc(userId), {
+      deletedAt: F.now(),
+      firstName: 'Deleted',
+      familyName: 'User',
+      city: '',
+      email: null,
+      photoUrl: null,
+      phone: `deleted:${userId}`,
     });
+    await b.commit();
+    await auth().deleteUser(userId);
     return { ok: true };
   }
 }
+
+/** used by a few modules: rows → map by id */
+export const byId = <T extends { id: string }>(xs: T[]) => new Map(xs.map((x) => [x.id, x]));
+export { rows };

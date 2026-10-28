@@ -1,0 +1,48 @@
+{
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "runtime": "nodejs22",
+      "predeploy": ["npm --prefix \"$RESOURCE_DIR\" run build"],
+      "ignore": ["node_modules", ".git", "firebase-debug.log", "firebase-debug.*.log", "test", "seed-assets", "uploads", "*.local"]
+    }
+  ],
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "storage": {
+    "rules": "storage.rules"
+  },
+  "hosting": [
+    {
+      "target": "api",
+      "public": "hosting/api",
+      "rewrites": [{ "source": "**", "function": { "functionId": "api", "region": "asia-south1" } }]
+    },
+    {
+      "target": "admin",
+      "public": "admin/out",
+      "trailingSlash": true,
+      "headers": [
+        { "source": "/_next/static/**", "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }] },
+        { "source": "**/*.html", "headers": [{ "key": "Cache-Control", "value": "no-cache" }] },
+        {
+          "source": "**",
+          "headers": [
+            { "key": "X-Frame-Options", "value": "DENY" },
+            { "key": "X-Content-Type-Options", "value": "nosniff" },
+            { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" }
+          ]
+        }
+      ]
+    }
+  ],
+  "emulators": {
+    "auth": { "port": 9099 },
+    "firestore": { "port": 8080 },
+    "ui": { "enabled": false },
+    "singleProjectMode": true
+  }
+}

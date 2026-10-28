@@ -1,57 +1,58 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
-import { and, eq, isNull, ne, sql } from 'drizzle-orm';
 import { env } from '../../config/env';
-import { DB, InjectDb } from '../../db/db';
-import { blasts, functions, guests, invites, messageLog, weddings } from '../../db/schema';
 import { AppError, conflict, notFound } from '../../common/errors';
 import { clock12, dayLabel, fnPast } from '../../common/time';
+import { col } from '../../db/paths';
+import { Blast, blastId, Fn, Guest, Invite, Wedding } from '../../db/models';
+import { byIds, data, db, F, getDoc, getRows, writeAll } from '../../db/store';
 import { WhatsappService } from '../infra/whatsapp.service';
 import { NotificationsService } from '../infra/notifications.service';
 import { couple } from '../guest/guest.service';
 import { HostAccessService } from './host-access.service';
 
+type Kind = 'rsvp_request' | 'reminder';
+
 /**
  * WhatsApp blasts: the invitation (rsvp_request) and ONE reminder per function.
  * The double-send guard has five layers:
- *   1 UNIQUE (function, kind)
+ *   1 the document id is (function, kind) — there can only be one
  *   2 the idempotency key returns the original result on a repeat tap
- *   3 queued → sending → sent; only 'failed' releases the row
+ *   3 queued → sending → sent; only 'failed' releases it
  *   4 the app shows a sheet naming the function and the exact count
- *   5 the app never shows the button again once the row reads 'sent'
- * Sending runs in the background, resumably: each recipient is logged, so a
- * restart mid-blast skips everyone already messaged.
+ *   5 the app never shows the button again once it reads 'sent'
+ * Sending runs in the background (a Firestore trigger on the blast, plus a sweep for stuck ones),
+ * resumably: each recipient is logged, so a restart mid-blast skips everyone already messaged.
  */
 @Injectable()
 export class BlastService {
   private readonly log = new Logger('Blast');
-  private running = false;
 
   constructor(
-    @InjectDb() private readonly db: DB,
     private readonly access: HostAccessService,
     private readonly wa: WhatsappService,
     private readonly notifications: NotificationsService,
   ) {}
 
-  private recipients(functionId: string, kind: 'rsvp_request' | 'reminder') {
-    const conds = [eq(invites.functionId, functionId), eq(invites.invited, true), eq(guests.active, true)];
-    if (kind === 'reminder') conds.push(ne(invites.rsvp, 'not_going'));
-    return this.db
-      .select({ inv: invites, g: guests })
-      .from(invites)
-      .innerJoin(guests, eq(guests.id, invites.guestId))
-      .where(and(...conds));
+  private async recipients(weddingId: string, functionId: string, kind: Kind) {
+    let inv = await getRows<Invite>(col.invites(weddingId).where('functionId', '==', functionId).where('invited', '==', true));
+    if (kind === 'reminder') inv = inv.filter((i) => i.rsvp !== 'not_going');
+    const gs = await byIds<Guest>(col.guests(weddingId), inv.map((i) => i.guestId));
+    return inv.map((i) => ({ inv: i, g: gs.get(i.guestId)! })).filter((r) => r.g?.active);
+  }
+
+  private async liveFn(weddingId: string, functionId: string) {
+    const f = await getDoc<Fn>(col.functions(weddingId).doc(functionId));
+    if (!f || f.deletedAt) throw notFound('Function');
+    return f;
   }
 
   /** what the confirmation sheet shows before sending */
-  async preview(userId: string, weddingId: string, functionId: string, kind: 'rsvp_request' | 'reminder') {
+  async preview(userId: string, weddingId: string, functionId: string, kind: Kind) {
     const ctx = await this.access.require(userId, weddingId);
-    const [f] = await this.db.select().from(functions).where(and(eq(functions.id, functionId), eq(functions.weddingId, ctx.w.id))).limit(1);
-    if (!f) throw notFound('Function');
-    const rows = await this.recipients(f.id, kind);
+    const f = await this.liveFn(ctx.w.id, functionId);
+    const rows = await this.recipients(ctx.w.id, f.id, kind);
     const appUsers = await this.notifications.usersByPhone(rows.map((r) => r.g.phone));
-    const [existing] = await this.db.select().from(blasts).where(and(eq(blasts.functionId, f.id), eq(blasts.kind, kind))).limit(1);
+    const existing = await getDoc<Blast>(col.blasts(ctx.w.id).doc(blastId(f.id, kind)));
     const sample = rows[0]?.g.name.split(' ')[0] ?? 'Guest';
     return {
       functionId: f.id,
@@ -64,70 +65,63 @@ export class BlastService {
     };
   }
 
-  private params(kind: 'rsvp_request' | 'reminder', guest: string, cpl: string, f: typeof functions.$inferSelect, tz: string) {
+  private params(kind: Kind, guest: string, cpl: string, f: Fn, tz: string) {
     const when = `${dayLabel(f.startsAt, tz)}, ${clock12(f.startsAt, tz)}`;
     return kind === 'rsvp_request' ? [guest, cpl, f.name, when, f.venueName] : [guest, f.name, cpl, when, f.venueName];
   }
 
-  private text(kind: 'rsvp_request' | 'reminder', guest: string, cpl: string, f: typeof functions.$inferSelect, tz: string) {
+  private text(kind: Kind, guest: string, cpl: string, f: Fn, tz: string) {
     const [a, b, c, d, e] = this.params(kind, guest, cpl, f, tz);
     return kind === 'rsvp_request'
       ? `Namaste ${a}! ${b} warmly invite you to the ${c} on ${d} at ${e}. Please reply in the Invite Karoo app.`
       : `Reminder: ${a}, the ${b} for ${c}'s wedding is on ${d} at ${e}. See you there!`;
   }
 
-  async send(userId: string, weddingId: string, functionId: string, kind: 'rsvp_request' | 'reminder', idempotencyKey: string) {
+  async send(userId: string, weddingId: string, functionId: string, kind: Kind, idempotencyKey: string) {
     const ctx = await this.access.require(userId, weddingId);
     // layer 2: a repeat tap returns the original
-    const [same] = await this.db.select().from(blasts).where(eq(blasts.idempotencyKey, idempotencyKey)).limit(1);
-    if (same) {
-      if (same.weddingId !== ctx.w.id) throw notFound('Blast');
-      return this.view(same);
+    const seen = await getDoc<{ weddingId: string; blastId: string }>(col.blastKeys().doc(idempotencyKey));
+    if (seen) {
+      if (seen.weddingId !== ctx.w.id) throw notFound('Blast');
+      const b = await getDoc<Blast>(col.blasts(ctx.w.id).doc(seen.blastId));
+      if (b) return this.view(b);
     }
     if (!ctx.w.sendingEnabled || ctx.w.status !== 'active') {
       throw new AppError('SENDING_OFF', 'Sending is switched off for this wedding. Contact the Invite Karoo team.', 409);
     }
-    const [f] = await this.db.select().from(functions).where(and(eq(functions.id, functionId), eq(functions.weddingId, ctx.w.id), isNull(functions.deletedAt))).limit(1);
-    if (!f) throw notFound('Function');
+    const f = await this.liveFn(ctx.w.id, functionId);
     if (fnPast(f)) throw new AppError('FUNCTION_PAST', 'This function is already over', 409);
     if (kind === 'reminder') {
-      const [inv] = await this.db.select().from(blasts).where(and(eq(blasts.functionId, f.id), eq(blasts.kind, 'rsvp_request'), eq(blasts.state, 'sent'))).limit(1);
-      if (!inv) throw new AppError('INVITE_FIRST', 'Send the invitation for this function first', 409);
+      const inv = await getDoc<Blast>(col.blasts(ctx.w.id).doc(blastId(f.id, 'rsvp_request')));
+      if (inv?.state !== 'sent') throw new AppError('INVITE_FIRST', 'Send the invitation for this function first', 409);
     }
-    const rows = await this.recipients(f.id, kind);
+    const rows = await this.recipients(ctx.w.id, f.id, kind);
     if (!rows.length) throw new AppError('NO_RECIPIENTS', 'Nobody to send to on this function', 409);
 
-    const row = await this.db.transaction(async (tx) => {
-      const [existing] = await tx
-        .select()
-        .from(blasts)
-        .where(and(eq(blasts.functionId, f.id), eq(blasts.kind, kind)))
-        .for('update')
-        .limit(1);
+    const ref = col.blasts(ctx.w.id).doc(blastId(f.id, kind));
+    await db().runTransaction(async (tx) => {
+      const existing = data<Blast>(await tx.get(ref));
       if (existing && existing.state !== 'failed') {
         throw conflict('ALREADY_SENT', kind === 'reminder' ? 'The WhatsApp reminder for this function has already gone out' : 'The invitation for this function has already gone out');
       }
+      tx.set(col.blastKeys().doc(idempotencyKey), { weddingId: ctx.w.id, blastId: ref.id, createdAt: F.now() });
       if (existing) {
         // layer 3: only a failed blast is released, and it resumes where it stopped
-        const [r] = await tx
-          .update(blasts)
-          .set({ state: 'queued', idempotencyKey, recipientCount: rows.length, sentBy: ctx.phone, error: null })
-          .where(eq(blasts.id, existing.id))
-          .returning();
-        return r;
+        tx.update(ref, { state: 'queued', idempotencyKey, recipientCount: rows.length, sentBy: ctx.phone, error: null, claimedAt: null });
+      } else {
+        tx.set(ref, {
+          weddingId: ctx.w.id, functionId: f.id, kind, state: 'queued', idempotencyKey,
+          recipientCount: rows.length, deliveredCount: 0, failedCount: 0,
+          sentBy: ctx.phone, sentAt: null, error: null, claimedAt: null, createdAt: F.now(),
+        });
       }
-      const [r] = await tx
-        .insert(blasts)
-        .values({ weddingId: ctx.w.id, functionId: f.id, kind, idempotencyKey, recipientCount: rows.length, sentBy: ctx.phone })
-        .returning();
-      return r;
     });
-    if (env().NODE_ENV === 'test') await this.processQueued();
-    else void this.processQueued();
-    return this.view(row);
+    // in production a Firestore trigger on the blast sends it; tests send right away
+    if (env().NODE_ENV === 'test') await this.process(ctx.w.id, ref.id);
+    return this.view((await getDoc<Blast>(ref))!);
   }
 
-  private view(b: typeof blasts.$inferSelect) {
+  private view(b: Blast) {
     return {
       id: b.id,
       functionId: b.functionId,
@@ -140,43 +134,41 @@ export class BlastService {
     };
   }
 
-  /** picks up queued blasts (and ones stuck in 'sending' after a restart) */
-  @Cron('*/20 * * * * *')
-  async processQueued() {
-    if (this.running) return;
-    this.running = true;
+  /** claims a queued blast (or one stuck in 'sending' for 10 minutes) and sends it; no-op otherwise */
+  async process(weddingId: string, id: string) {
+    const ref = col.blasts(weddingId).doc(id);
+    const claimed = await db().runTransaction(async (tx) => {
+      const b = data<Blast & { claimedAt: Date | null }>(await tx.get(ref));
+      if (!b) return false;
+      const stuck = b.state === 'sending' && (!b.claimedAt || Date.now() - b.claimedAt.getTime() > 10 * 60_000);
+      if (b.state !== 'queued' && !stuck) return false;
+      tx.update(ref, { state: 'sending', claimedAt: F.now() });
+      return true;
+    });
+    if (!claimed) return;
     try {
-      for (;;) {
-        // claim one blast atomically so two servers never send the same one
-        const claimed = await this.db.execute<{ id: string }>(sql`
-          update blasts set state = 'sending'
-          where id = (
-            select id from blasts
-            where state = 'queued'
-               or (state = 'sending' and created_at < now() - interval '10 minutes')
-            order by created_at limit 1 for update skip locked
-          )
-          returning id`);
-        const id = claimed.rows[0]?.id;
-        if (!id) break;
-        await this.run(id);
-      }
+      await this.run(weddingId, id);
     } catch (e) {
-      this.log.error((e as Error).message);
-    } finally {
-      this.running = false;
+      this.log.error(`blast ${id}: ${(e as Error).message}`);
+      await ref.update({ state: 'failed', error: (e as Error).message.slice(0, 300) });
     }
   }
 
-  private async run(blastId: string) {
-    const [b] = await this.db.select().from(blasts).where(eq(blasts.id, blastId)).limit(1);
-    const [f] = await this.db.select().from(functions).where(eq(functions.id, b.functionId)).limit(1);
-    const [w] = await this.db.select().from(weddings).where(eq(weddings.id, b.weddingId)).limit(1);
-    const rows = await this.recipients(f.id, b.kind);
-    const done = await this.db
-      .select({ to: messageLog.to })
-      .from(messageLog)
-      .where(and(eq(messageLog.relatedType, 'blast'), eq(messageLog.relatedId, b.id), eq(messageLog.status, 'sent')));
+  /** the sweep: every queued or stuck blast, across weddings */
+  async processQueued() {
+    const qs = await Promise.all([
+      getRows<Blast>(db().collectionGroup('blasts').where('state', '==', 'queued')),
+      getRows<Blast>(db().collectionGroup('blasts').where('state', '==', 'sending')),
+    ]);
+    for (const b of qs.flat()) await this.process(b.weddingId, b.id);
+  }
+
+  private async run(weddingId: string, id: string) {
+    const b = (await getDoc<Blast>(col.blasts(weddingId).doc(id)))!;
+    const f = (await getDoc<Fn>(col.functions(weddingId).doc(b.functionId)))!;
+    const w = (await getDoc<Wedding>(col.weddings().doc(weddingId)))!;
+    const rows = await this.recipients(weddingId, f.id, b.kind);
+    const done = await getRows<{ to: string }>(col.messageLog().where('relatedType', '==', 'blast').where('relatedId', '==', `${weddingId}/${b.id}`).where('status', '==', 'sent'));
     const already = new Set(done.map((d) => d.to));
     let delivered = already.size;
     let failed = 0;
@@ -185,16 +177,14 @@ export class BlastService {
       if (already.has(g.phone)) continue;
       const r = await this.wa.send(g.phone, b.kind === 'rsvp_request' ? 'invite' : 'reminder', this.params(b.kind, g.name.split(' ')[0], cpl, f, w.timezone), {
         type: 'blast',
-        id: b.id,
+        id: `${weddingId}/${b.id}`,
       });
       if (r.ok) delivered++;
       else failed++;
     }
     if (b.kind === 'rsvp_request') {
-      await this.db
-        .update(invites)
-        .set({ notifiedAt: new Date() })
-        .where(and(eq(invites.functionId, f.id), eq(invites.invited, true), isNull(invites.notifiedAt)));
+      const unnotified = rows.filter((r) => !r.inv.notifiedAt);
+      await writeAll(unnotified.map((r) => (bt) => bt.update(col.invites(weddingId).doc(r.inv.id), { notifiedAt: F.now() })));
     }
     // the same message lands in the app feed of every guest who has the app
     const users = await this.notifications.usersByPhone(rows.map((r) => r.g.phone));
@@ -207,16 +197,15 @@ export class BlastService {
       action: { type: 'function', weddingId: w.id, functionId: f.id },
     });
     const allFailed = delivered === 0 && failed > 0;
-    await this.db
-      .update(blasts)
-      .set({ state: allFailed ? 'failed' : 'sent', sentAt: new Date(), deliveredCount: delivered, failedCount: failed, error: allFailed ? 'Every message failed' : null })
-      .where(eq(blasts.id, b.id));
+    await col.blasts(weddingId).doc(id).update({
+      state: allFailed ? 'failed' : 'sent', sentAt: F.now(), deliveredCount: delivered, failedCount: failed, error: allFailed ? 'Every message failed' : null,
+    });
     this.log.log(`blast ${b.kind} for ${f.name}: ${delivered} sent, ${failed} failed`);
   }
 
   async state(userId: string, weddingId: string, functionId: string) {
     const ctx = await this.access.require(userId, weddingId);
-    const rows = await this.db.select().from(blasts).where(and(eq(blasts.weddingId, ctx.w.id), eq(blasts.functionId, functionId)));
+    const rows = await getRows<Blast>(col.blasts(ctx.w.id).where('functionId', '==', functionId));
     return rows.map((r) => this.view(r));
   }
 }

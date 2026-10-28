@@ -1,4 +1,4 @@
-import { PipeTransform } from '@nestjs/common';
+import { BadRequestException, PipeTransform } from '@nestjs/common';
 import { z, ZodType } from 'zod';
 import { AppError } from './errors';
 
@@ -17,7 +17,19 @@ export class Zod<T extends ZodType> implements PipeTransform {
   }
 }
 
-export const zUuid = z.string().uuid();
+/** a Firestore document id */
+export const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+export const zId = z.string().regex(ID_RE, 'Not a valid id');
+/** @deprecated name kept for older call sites: ids are Firestore ids now */
+export const zUuid = zId;
+
+/** `@Param('id', IdPipe)` */
+export class IdPipe implements PipeTransform {
+  transform(v: string) {
+    if (typeof v !== 'string' || !ID_RE.test(v)) throw new BadRequestException('Not a valid id');
+    return v;
+  }
+}
 export const zDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD');
 export const zTime = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Use HH:mm (24 hour)');
 export const zPage = z.object({

@@ -1,0 +1,38 @@
+name: API
+
+# The API (Cloud Functions) tests, twice: against the in-memory store, and against the real
+# Firestore + Auth emulators.
+on:
+  push:
+    paths: ['functions/**', 'firebase.json', 'firestore.*', '.github/workflows/functions.yml']
+  pull_request:
+    paths: ['functions/**']
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: functions
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: functions/package-lock.json
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Build
+        run: npm run build
+      - name: Tests (in-memory Firestore)
+        run: npm test
+      - name: Tests (Firebase emulators)
+        working-directory: .
+        run: npx --yes firebase-tools@latest emulators:exec --only firestore,auth --project demo-invitekaroo "npm --prefix functions test"

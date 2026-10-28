@@ -1,8 +1,8 @@
 import { Injectable } from '@nestjs/common';
-import { and, eq, isNull } from 'drizzle-orm';
-import { DB, InjectDb } from '../../db/db';
-import { users, weddingAccess, weddings } from '../../db/schema';
 import { forbidden, notFound } from '../../common/errors';
+import { col } from '../../db/paths';
+import { Access, User, Wedding } from '../../db/models';
+import { getDoc, getRows } from '../../db/store';
 
 export type HostRole = 'owner' | 'cohost' | 'giftdesk';
 /**
@@ -13,7 +13,7 @@ export type HostRole = 'owner' | 'cohost' | 'giftdesk';
 export type AccessLevel = 'owner' | 'full' | 'desk';
 
 export type HostCtx = {
-  w: typeof weddings.$inferSelect;
+  w: Wedding;
   role: HostRole;
   phone: string;
   userId: string;
@@ -23,20 +23,13 @@ export type HostCtx = {
 /** who may run a wedding's console: the owner's number, or a family member the owner added */
 @Injectable()
 export class HostAccessService {
-  constructor(@InjectDb() private readonly db: DB) {}
-
   async require(userId: string, weddingId: string, level: AccessLevel = 'full'): Promise<HostCtx> {
-    const [u] = await this.db.select().from(users).where(and(eq(users.id, userId), isNull(users.deletedAt))).limit(1);
-    if (!u) throw notFound('Account');
-    const [w] = await this.db.select().from(weddings).where(eq(weddings.id, weddingId)).limit(1);
+    const [u, w] = await Promise.all([getDoc<User>(col.users().doc(userId)), getDoc<Wedding>(col.weddings().doc(weddingId))]);
+    if (!u || u.deletedAt) throw notFound('Account');
     if (!w || !w.handedOverAt || w.status === 'draft') throw notFound('Wedding');
     let role: HostRole | null = w.ownerPhone === u.phone ? 'owner' : null;
     if (!role) {
-      const [a] = await this.db
-        .select()
-        .from(weddingAccess)
-        .where(and(eq(weddingAccess.weddingId, w.id), eq(weddingAccess.phone, u.phone), isNull(weddingAccess.removedAt)))
-        .limit(1);
+      const [a] = await getRows<Access>(col.access(w.id).where('phone', '==', u.phone).where('removedAt', '==', null).limit(1));
       if (a) role = a.role;
     }
     if (!role) throw forbidden('You do not have access to this wedding’s console');

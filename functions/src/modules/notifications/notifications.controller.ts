@@ -1,12 +1,12 @@
-import { Controller, Get, HttpCode, Param, ParseUUIDPipe, Post, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, HttpCode, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { and, count, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { CurrentUser, UserClaims, UserGuard } from '../../common/auth';
 import { notFound } from '../../common/errors';
-import { Zod } from '../../common/zod';
-import { DB, InjectDb } from '../../db/db';
-import { notifications } from '../../db/schema';
+import { Zod, IdPipe } from '../../common/zod';
+import { col } from '../../db/paths';
+import { Notification } from '../../db/models';
+import { getDoc, getRows, writeAll } from '../../db/store';
 
 const List = z.object({
   cat: z.enum(['inv', 'rem', 'host', 'sys']).optional(),
@@ -20,17 +20,13 @@ const List = z.object({
 @UseGuards(UserGuard)
 @Controller('v1/notifications')
 export class NotificationsController {
-  constructor(@InjectDb() private readonly db: DB) {}
-
   @Get()
   async list(@CurrentUser() u: UserClaims, @Query(new Zod(List)) q: z.infer<typeof List>) {
-    const where = and(
-      eq(notifications.userId, u.sub),
-      q.cat ? eq(notifications.cat, q.cat) : undefined,
-      q.unread === '1' ? eq(notifications.read, false) : undefined,
-    );
-    const rows = await this.db.select().from(notifications).where(where).orderBy(desc(notifications.createdAt)).limit(q.limit).offset(q.offset);
-    const [{ n: unread }] = await this.db.select({ n: count() }).from(notifications).where(and(eq(notifications.userId, u.sub), eq(notifications.read, false)));
+    let query = col.notifications(u.sub).orderBy('createdAt', 'desc');
+    if (q.cat) query = col.notifications(u.sub).where('cat', '==', q.cat).orderBy('createdAt', 'desc');
+    if (q.unread === '1') query = (q.cat ? col.notifications(u.sub).where('cat', '==', q.cat) : col.notifications(u.sub)).where('read', '==', false).orderBy('createdAt', 'desc');
+    const rows = await getRows<Notification>(query.offset(q.offset).limit(q.limit));
+    const unread = (await col.notifications(u.sub).where('read', '==', false).count().get()).data().count;
     return {
       unread,
       items: rows.map((r) => ({ id: r.id, cat: r.cat, title: r.title, body: r.body, long: r.long, art: r.art, action: r.action, read: r.read, createdAt: r.createdAt })),
@@ -40,25 +36,27 @@ export class NotificationsController {
   @Post('read-all')
   @HttpCode(200)
   async readAll(@CurrentUser() u: UserClaims) {
-    await this.db.update(notifications).set({ read: true }).where(and(eq(notifications.userId, u.sub), eq(notifications.read, false)));
+    const rows = await getRows(col.notifications(u.sub).where('read', '==', false));
+    await writeAll(rows.map((r) => (b) => b.update(col.notifications(u.sub).doc(r.id), { read: true })));
     return { ok: true };
   }
 
   @Post(':id/read')
   @HttpCode(200)
-  read(@CurrentUser() u: UserClaims, @Param('id', ParseUUIDPipe) id: string) {
+  read(@CurrentUser() u: UserClaims, @Param('id', IdPipe) id: string) {
     return this.mark(u.sub, id, true);
   }
 
   @Post(':id/unread')
   @HttpCode(200)
-  unread(@CurrentUser() u: UserClaims, @Param('id', ParseUUIDPipe) id: string) {
+  unread(@CurrentUser() u: UserClaims, @Param('id', IdPipe) id: string) {
     return this.mark(u.sub, id, false);
   }
 
   private async mark(userId: string, id: string, read: boolean) {
-    const [r] = await this.db.update(notifications).set({ read }).where(and(eq(notifications.id, id), eq(notifications.userId, userId))).returning({ id: notifications.id });
-    if (!r) throw notFound('Notification');
+    const ref = col.notifications(userId).doc(id);
+    if (!(await getDoc(ref))) throw notFound('Notification');
+    await ref.update({ read });
     return { ok: true };
   }
 }

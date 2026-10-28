@@ -1,9 +1,9 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Put, Query, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Put, Query, Res, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { z } from 'zod';
 import { CurrentUser, UserClaims, UserGuard } from '../../common/auth';
-import { Zod, zDate } from '../../common/zod';
+import { Zod, zDate, IdPipe } from '../../common/zod';
 import { StorageService } from '../infra/storage.service';
 import { GuestService } from './guest.service';
 
@@ -40,12 +40,12 @@ export class GuestController {
   }
 
   @Get('weddings/:wid')
-  wedding(@CurrentUser() u: UserClaims, @Param('wid', ParseUUIDPipe) wid: string) {
+  wedding(@CurrentUser() u: UserClaims, @Param('wid', IdPipe) wid: string) {
     return this.guest.wedding(u.sub, wid);
   }
 
   @Get('weddings/:wid/card.pdf')
-  async card(@CurrentUser() u: UserClaims, @Param('wid', ParseUUIDPipe) wid: string, @Res() res: Response) {
+  async card(@CurrentUser() u: UserClaims, @Param('wid', IdPipe) wid: string, @Res() res: Response) {
     const card = await this.guest.cardKey(u.sub, wid);
     const buf = await this.storage.read(card.key);
     res.setHeader('Content-Type', 'application/pdf');
@@ -54,12 +54,12 @@ export class GuestController {
   }
 
   @Get('weddings/:wid/qr')
-  qr(@CurrentUser() u: UserClaims, @Param('wid', ParseUUIDPipe) wid: string) {
+  qr(@CurrentUser() u: UserClaims, @Param('wid', IdPipe) wid: string) {
     return this.guest.qr(u.sub, wid);
   }
 
   @Get('weddings/:wid/functions/:fid')
-  fn(@CurrentUser() u: UserClaims, @Param('wid', ParseUUIDPipe) wid: string, @Param('fid', ParseUUIDPipe) fid: string) {
+  fn(@CurrentUser() u: UserClaims, @Param('wid', IdPipe) wid: string, @Param('fid', IdPipe) fid: string) {
     return this.guest.fn(u.sub, wid, fid);
   }
 
@@ -67,8 +67,8 @@ export class GuestController {
   @Post('weddings/:wid/functions/:fid/rsvp')
   rsvp(
     @CurrentUser() u: UserClaims,
-    @Param('wid', ParseUUIDPipe) wid: string,
-    @Param('fid', ParseUUIDPipe) fid: string,
+    @Param('wid', IdPipe) wid: string,
+    @Param('fid', IdPipe) fid: string,
     @Body(new Zod(Rsvp)) b: z.infer<typeof Rsvp>,
   ) {
     return this.guest.rsvp(u.sub, wid, fid, b.rsvp, b.pax);
@@ -78,8 +78,8 @@ export class GuestController {
   @Put('weddings/:wid/functions/:fid/reminders')
   reminders(
     @CurrentUser() u: UserClaims,
-    @Param('wid', ParseUUIDPipe) wid: string,
-    @Param('fid', ParseUUIDPipe) fid: string,
+    @Param('wid', IdPipe) wid: string,
+    @Param('fid', IdPipe) fid: string,
     @Body(new Zod(Reminders)) b: z.infer<typeof Reminders>,
   ) {
     return this.guest.setReminders(u.sub, wid, fid, b.offDefaults, b.mine);

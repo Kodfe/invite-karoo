@@ -1,6 +1,5 @@
-import { isNull } from 'drizzle-orm';
-import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
-import * as schema from './schema';
+import { col } from './paths';
+import { getRows, writeAll } from './store';
 
 /** the six gift categories every wedding starts with. Idempotent. */
 export const SYSTEM_GIFT_CATEGORIES = [
@@ -12,16 +11,14 @@ export const SYSTEM_GIFT_CATEGORIES = [
   { key: 'other', label: 'Other', isCash: false },
 ];
 
-export async function seedSystemData(db: NodePgDatabase<typeof schema>) {
-  const existing = await db
-    .select({ key: schema.giftCategories.key })
-    .from(schema.giftCategories)
-    .where(isNull(schema.giftCategories.weddingId));
-  const have = new Set(existing.map((e) => e.key));
+export async function seedSystemData() {
+  const have = new Set((await getRows<{ key: string }>(col.systemGiftCategories())).map((c) => c.key));
   const missing = SYSTEM_GIFT_CATEGORIES.filter((c) => !have.has(c.key));
-  if (missing.length) {
-    await db.insert(schema.giftCategories).values(
-      missing.map((c) => ({ ...c, isSystem: true, sort: SYSTEM_GIFT_CATEGORIES.indexOf(c) })),
-    );
-  }
+  // the key is the document id, so running this twice can never make two "cash" categories
+  await writeAll(
+    missing.map((c) => (b) =>
+      b.set(col.systemGiftCategories().doc(c.key), { ...c, weddingId: null, isSystem: true, active: true, sort: SYSTEM_GIFT_CATEGORIES.indexOf(c), createdAt: new Date() }),
+    ),
+  );
+  return missing.length;
 }

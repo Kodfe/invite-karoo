@@ -25,7 +25,6 @@ const VerifyOtp = phoneIn.extend({
   platform: z.enum(['android', 'ios', 'web']).optional(),
 });
 const Signup = profile.extend({ signupTicket: z.string().min(10), platform: z.enum(['android', 'ios', 'web']).optional() });
-const Refresh = z.object({ refreshToken: z.string().min(10) });
 
 export function phoneOrThrow(cc: string, mobile: string) {
   const p = toE164(mobile, cc);
@@ -46,7 +45,7 @@ export class AuthController {
     return this.auth.requestOtp(phoneOrThrow(b.cc, b.mobile), b.purpose);
   }
 
-  /** Step 2 — check the code. Known number → signed in. New number → signed in if `profile` sent, else a signup ticket. */
+  /** Step 2 — check the code. Known number → signed in (a Firebase custom token). New number → signed in if `profile` sent, else a signup ticket. */
   @Post('otp/verify')
   @HttpCode(200)
   @Throttle({ default: { limit: perMinute(20), ttl: 60_000 } })
@@ -60,17 +59,5 @@ export class AuthController {
   signup(@Body(new Zod(Signup)) b: z.infer<typeof Signup>) {
     const { signupTicket, platform, ...p } = b;
     return this.auth.signupWithTicket(signupTicket, p, platform);
-  }
-
-  @Post('refresh')
-  @HttpCode(200)
-  refresh(@Body(new Zod(Refresh)) b: z.infer<typeof Refresh>) {
-    return this.auth.refresh(b.refreshToken);
-  }
-
-  @Post('logout')
-  @HttpCode(200)
-  logout(@Body(new Zod(Refresh)) b: z.infer<typeof Refresh>) {
-    return this.auth.logout(b.refreshToken);
   }
 }

@@ -1,33 +1,46 @@
-/* Creates (or resets the password of) the first admin from ADMIN_EMAIL / ADMIN_PASSWORD. */
+/*
+ * Creates the first dashboard account from ADMIN_EMAIL / ADMIN_PASSWORD (a Firebase Auth email user
+ * with the custom claim ikRole=admin, plus its admins/{uid} record), and the system gift categories.
+ * Safe to run on every deploy: an existing account keeps its password unless --reset-password is given.
+ *   npm run seed:admin              (CI runs this after deploying, with the project's credentials)
+ */
 import 'dotenv/config';
-import { eq } from 'drizzle-orm';
-import { drizzle } from 'drizzle-orm/node-postgres';
 import { env } from '../config/env';
-import { hashPassword } from '../common/crypto';
-import { createPool } from './db';
-import * as schema from './schema';
+import { auth } from '../common/firebase-auth';
+import { col } from './paths';
+import { getDoc } from './store';
+import { seedSystemData } from './seed-system';
 
-async function main() {
+export async function seedAdmin(opts: { resetPassword?: boolean } = {}) {
+  const added = await seedSystemData();
   const { ADMIN_EMAIL, ADMIN_PASSWORD, ADMIN_NAME } = env();
-  if (!ADMIN_EMAIL || ADMIN_PASSWORD.length < 10) {
-    throw new Error('Set ADMIN_EMAIL and an ADMIN_PASSWORD of at least 10 characters first.');
+  if (!ADMIN_EMAIL) return { categoriesAdded: added, admin: 'skipped (no ADMIN_EMAIL)' };
+  const email = ADMIN_EMAIL.trim().toLowerCase();
+  let user = await auth().getUserByEmail(email);
+  let state = 'kept';
+  if (!user) {
+    if (ADMIN_PASSWORD.length < 10) throw new Error('ADMIN_PASSWORD must be at least 10 characters to create the first admin.');
+    user = await auth().createUser({ email, password: ADMIN_PASSWORD, displayName: ADMIN_NAME });
+    state = 'created';
+  } else if (opts.resetPassword && ADMIN_PASSWORD.length >= 10) {
+    await auth().updateUser(user.uid, { password: ADMIN_PASSWORD, disabled: false });
+    state = 'password reset';
   }
-  const pool = createPool();
-  const db = drizzle(pool, { schema });
-  const email = ADMIN_EMAIL.toLowerCase();
-  const passwordHash = await hashPassword(ADMIN_PASSWORD);
-  const [existing] = await db.select().from(schema.adminUsers).where(eq(schema.adminUsers.email, email)).limit(1);
-  if (existing) {
-    await db.update(schema.adminUsers).set({ passwordHash, active: true, role: 'admin' }).where(eq(schema.adminUsers.id, existing.id));
-    console.log(`Admin ${email} updated.`);
-  } else {
-    await db.insert(schema.adminUsers).values({ email, name: ADMIN_NAME, role: 'admin', passwordHash });
-    console.log(`Admin ${email} created.`);
-  }
-  await pool.end();
+  await auth().setRole(user.uid, 'admin');
+  const ref = col.admins().doc(user.uid);
+  const cur = await getDoc(ref);
+  await ref.set({ email, name: (cur as { name?: string } | null)?.name ?? ADMIN_NAME, role: 'admin', active: true, lastLoginAt: null, createdAt: new Date() }, { merge: true });
+  return { categoriesAdded: added, admin: `${email} ${state}` };
 }
 
-main().catch((e) => {
-  console.error(e.message);
-  process.exit(1);
-});
+if (require.main === module) {
+  seedAdmin({ resetPassword: process.argv.includes('--reset-password') })
+    .then((r) => {
+      console.log(r);
+      process.exit(0);
+    })
+    .catch((e) => {
+      console.error(e.message);
+      process.exit(1);
+    });
+}

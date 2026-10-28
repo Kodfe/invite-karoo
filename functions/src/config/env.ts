@@ -1,20 +1,20 @@
 import { z } from 'zod';
 
+/**
+ * Settings. On Firebase, plain values come from `functions/.env` (deployed with the code) and
+ * secrets from Secret Manager (`firebase functions:secrets:set NAME`); both arrive as process.env.
+ */
 const schema = z.object({
-  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  NODE_ENV: z.enum(['development', 'test', 'production']).default('production'),
+  /** only for running the API outside Cloud Functions (npm run dev) */
   PORT: z.coerce.number().default(3000),
-  PUBLIC_URL: z.string().default('http://localhost:3000'),
-  CORS_ORIGINS: z.string().default('http://localhost:5173'),
+  PUBLIC_URL: z.string().default('https://api.invitekaroo.com'),
+  /** web origins allowed to call the API (the Admin Dashboard) */
+  CORS_ORIGINS: z.string().default('https://admin.invitekaroo.com'),
 
-  DATABASE_URL: z.string().min(1),
-  /** CA certificate of a managed Postgres that needs it (DigitalOcean: ${db.CA_CERT}) */
-  DATABASE_CA_CERT: z.string().default(''),
-
-  JWT_ACCESS_SECRET: z.string().min(8),
-  JWT_REFRESH_SECRET: z.string().min(8),
-  JWT_ADMIN_SECRET: z.string().min(8),
-  ACCESS_TOKEN_TTL: z.string().default('15m'),
-  REFRESH_TOKEN_TTL_DAYS: z.coerce.number().default(60),
+  /** secret: salts the OTP code hashes */
+  OTP_SECRET: z.string().default('dev-otp-secret'),
+  /** development only: every code is this and nothing is sent. Must be empty in production. */
   DEV_OTP: z.string().default(''),
 
   WHATSAPP_PROVIDER: z.enum(['console', 'meta']).default('console'),
@@ -26,17 +26,18 @@ const schema = z.object({
   WA_TEMPLATE_REMINDER: z.string().default('ik_function_reminder'),
   WA_TEMPLATE_LANG: z.string().default('en'),
 
+  /** only needed outside Google Cloud (local dev against a real project) */
   FIREBASE_SERVICE_ACCOUNT_JSON: z.string().default(''),
   FIREBASE_STORAGE_BUCKET: z.string().default(''),
 
-  STORAGE_DRIVER: z.enum(['local', 'firebase']).default('local'),
+  /** firebase = Cloud Storage (production); local = ./uploads served at /files (development, tests) */
+  STORAGE_DRIVER: z.enum(['local', 'firebase']).default('firebase'),
   UPLOAD_DIR: z.string().default('./uploads'),
-  /** the built Admin Dashboard (admin/dist), served at /admin when the folder exists */
-  ADMIN_DIR: z.string().default('./public/admin'),
 
   ANTHROPIC_API_KEY: z.string().default(''),
   AI_MODEL: z.string().default('claude-sonnet-5-5'),
 
+  /** the first dashboard account (npm run seed:admin creates it when there is no admin yet) */
   ADMIN_EMAIL: z.string().default(''),
   ADMIN_PASSWORD: z.string().default(''),
   ADMIN_NAME: z.string().default('Invite Karoo Admin'),
@@ -49,16 +50,16 @@ let cached: Env | null = null;
 
 export function env(): Env {
   if (cached) return cached;
-  const parsed = schema.safeParse(process.env);
+  // a secret that has to exist for deploys but is not in use yet is stored as "unset"
+  const raw = Object.fromEntries(Object.entries(process.env).map(([k, v]) => [k, v === 'unset' ? '' : v]));
+  const parsed = schema.safeParse(raw);
   if (!parsed.success) {
     const msg = parsed.error.issues.map((i) => `  ${i.path.join('.')}: ${i.message}`).join('\n');
     throw new Error(`Invalid environment variables:\n${msg}`);
   }
   if (parsed.data.NODE_ENV === 'production') {
     if (parsed.data.DEV_OTP) throw new Error('DEV_OTP must be empty in production');
-    for (const k of ['JWT_ACCESS_SECRET', 'JWT_REFRESH_SECRET', 'JWT_ADMIN_SECRET'] as const) {
-      if (parsed.data[k].startsWith('change-me')) throw new Error(`${k} must be set to a real secret in production`);
-    }
+    if (parsed.data.OTP_SECRET === 'dev-otp-secret') throw new Error('Set the OTP_SECRET secret in production');
   }
   cached = parsed.data;
   return cached;

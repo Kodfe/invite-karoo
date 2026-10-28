@@ -1,8 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { getMessaging } from 'firebase-admin/messaging';
-import { inArray } from 'drizzle-orm';
-import { DB, InjectDb } from '../../db/db';
-import { devices } from '../../db/schema';
+import { col, group } from '../../db/paths';
+import { getRows, whereIn, writeAll } from '../../db/store';
 import { firebaseApp } from './firebase';
 
 export type PushPayload = { title: string; body: string; data?: Record<string, string> };
@@ -12,8 +11,6 @@ export class PushService {
   private readonly log = new Logger('Push');
   readonly outbox: { userIds: string[]; payload: PushPayload }[] = [];
 
-  constructor(@InjectDb() private readonly db: DB) {}
-
   async toUsers(userIds: string[], payload: PushPayload): Promise<number> {
     if (!userIds.length) return 0;
     const app = firebaseApp();
@@ -22,7 +19,7 @@ export class PushService {
       if (this.outbox.length > 500) this.outbox.shift();
       return 0;
     }
-    const rows = await this.db.select().from(devices).where(inArray(devices.userId, userIds));
+    const rows = (await Promise.all([...new Set(userIds)].map((u) => getRows<{ fcmToken: string }>(col.devices(u))))).flat();
     if (!rows.length) return 0;
     const tokens = rows.map((r) => r.fcmToken);
     let sent = 0;
@@ -40,7 +37,10 @@ export class PushService {
         const dead = res.responses
           .map((r, idx) => (!r.success && /registration-token-not-registered|invalid-argument/.test(r.error?.code ?? '') ? batch[idx] : null))
           .filter((t): t is string => !!t);
-        if (dead.length) await this.db.delete(devices).where(inArray(devices.fcmToken, dead));
+        if (dead.length) {
+          const stale = await whereIn(group.devices(), 'fcmToken', dead);
+          await writeAll(stale.map((d) => (b) => b.delete(col.devices(String((d as { userId?: string }).userId)).doc(d.id))));
+        }
       } catch (e) {
         this.log.warn(`push failed: ${(e as Error).message}`);
       }

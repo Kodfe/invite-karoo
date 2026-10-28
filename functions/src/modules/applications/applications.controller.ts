@@ -2,13 +2,13 @@ import { Body, Controller, Get, Post, Res, UploadedFiles, UseGuards, UseIntercep
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
-import { and, desc, eq, inArray, or } from 'drizzle-orm';
 import { z } from 'zod';
 import { CurrentUser, UserClaims, UserGuard } from '../../common/auth';
 import { AppError, conflict } from '../../common/errors';
 import { Zod, zDate } from '../../common/zod';
-import { DB, InjectDb } from '../../db/db';
-import { hostApplications, users } from '../../db/schema';
+import { col } from '../../db/paths';
+import { Application, User } from '../../db/models';
+import { F, getDoc, getRows } from '../../db/store';
 import { StorageService } from '../infra/storage.service';
 import { SheetService } from '../sheets/sheet.service';
 
@@ -43,7 +43,6 @@ type Files = { guests?: Express.Multer.File[]; card?: Express.Multer.File[] };
 @Controller('v1/host-applications')
 export class ApplicationsController {
   constructor(
-    @InjectDb() private readonly db: DB,
     private readonly sheets: SheetService,
     private readonly storage: StorageService,
   ) {}
@@ -68,13 +67,18 @@ export class ApplicationsController {
     return { report: parsed.report, functions: parsed.functions, wedding: parsed.wedding };
   }
 
+  private async ofUser(u: UserClaims) {
+    const [a, b] = await Promise.all([
+      getRows<Application>(col.applications().where('userId', '==', u.sub)),
+      getRows<Application>(col.applications().where('phone', '==', u.phone)),
+    ]);
+    const m = new Map([...a, ...b].map((x) => [x.id, x]));
+    return [...m.values()].sort((x, y) => y.createdAt.getTime() - x.createdAt.getTime());
+  }
+
   @Get('mine')
   async mine(@CurrentUser() u: UserClaims) {
-    return this.db
-      .select({ id: hostApplications.id, status: hostApplications.status, data: hostApplications.data, createdAt: hostApplications.createdAt, guestReport: hostApplications.guestReport })
-      .from(hostApplications)
-      .where(or(eq(hostApplications.userId, u.sub), eq(hostApplications.phone, u.phone)))
-      .orderBy(desc(hostApplications.createdAt));
+    return (await this.ofUser(u)).map((a) => ({ id: a.id, status: a.status, data: a.data, createdAt: a.createdAt, guestReport: a.guestReport }));
   }
 
   /** multipart: `data` = JSON of the form, optional files `guests` (sheet) and `card` (PDF) */
@@ -88,13 +92,9 @@ export class ApplicationsController {
       throw new AppError('VALIDATION', 'The form could not be read', 422);
     }
     const data = new Zod(AppData).transform(raw);
-    const [open] = await this.db
-      .select({ id: hostApplications.id })
-      .from(hostApplications)
-      .where(and(or(eq(hostApplications.userId, u.sub), eq(hostApplications.phone, u.phone)), inArray(hostApplications.status, ['new', 'in_setup'])))
-      .limit(1);
+    const open = (await this.ofUser(u)).some((a) => a.status === 'new' || a.status === 'in_setup');
     if (open) throw conflict('APPLICATION_OPEN', 'You already have an application with our team. We will message you on WhatsApp.');
-    const [me] = await this.db.select().from(users).where(eq(users.id, u.sub)).limit(1);
+    const me = (await getDoc<User>(col.users().doc(u.sub)))!;
 
     let guestFile = null;
     let guestReport = null;
@@ -112,10 +112,11 @@ export class ApplicationsController {
       const s = await this.storage.put(`applications/${u.sub}`, c);
       cardFile = { key: s.key, name: s.name, size: s.size };
     }
-    const [row] = await this.db
-      .insert(hostApplications)
-      .values({ userId: u.sub, phone: me.phone, data, guestFile, guestReport, cardFile })
-      .returning();
-    return { id: row.id, status: row.status, guestReport };
+    const ref = col.applications().doc();
+    await ref.set({
+      userId: u.sub, phone: me.phone, status: 'new', data, guestFile, guestReport, cardFile,
+      weddingId: null, assignedTo: null, adminNotes: null, createdAt: F.now(), updatedAt: F.now(),
+    });
+    return { id: ref.id, status: 'new', guestReport };
   }
 }

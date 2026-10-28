@@ -1,9 +1,7 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
-import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { env } from './config/env';
-import { DbModule } from './db/db';
 import { InfraModule } from './modules/infra/infra.module';
 import { AuthController } from './modules/auth/auth.controller';
 import { AuthService } from './modules/auth/auth.service';
@@ -22,7 +20,7 @@ import { AiScanService } from './modules/events/ai-scan.service';
 import { NotificationsController } from './modules/notifications/notifications.controller';
 import { SupportController } from './modules/support/support.controller';
 import { RemindersService } from './modules/reminders/reminders.service';
-import { AdminAuthController, AdminController } from './modules/admin/admin.controller';
+import { AdminController } from './modules/admin/admin.controller';
 import { AdminWeddingsService } from './modules/admin/admin-weddings.service';
 import { ConfigController } from './modules/config/config.controller';
 
@@ -30,9 +28,7 @@ const isTest = env().NODE_ENV === 'test';
 
 @Module({
   imports: [
-    DbModule,
     InfraModule,
-    ...(isTest ? [] : [ScheduleModule.forRoot()]),
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: isTest ? 100_000 : 300 }]),
   ],
   controllers: [
@@ -45,7 +41,6 @@ const isTest = env().NODE_ENV === 'test';
     EventsController,
     NotificationsController,
     SupportController,
-    AdminAuthController,
     AdminController,
   ],
   providers: [

@@ -1,14 +1,15 @@
 import { Injectable } from '@nestjs/common';
-import { and, asc, eq, inArray, isNull } from 'drizzle-orm';
-import { DB, InjectDb } from '../../db/db';
-import { functions, guests, invites, users, weddingAccess, weddingMedia, weddings } from '../../db/schema';
+import { col, group } from '../../db/paths';
+import { Access, Fn as FnDoc, Guest, Invite, Media, User, Wedding } from '../../db/models';
+import { byIds, F, getDoc, getRows } from '../../db/store';
 import { AppError, notFound } from '../../common/errors';
 import { prettyPhone } from '../../common/phone';
 import { APP_DEFAULT_REMINDERS, clock12, dayLabel, fnLive, fnPast, localParts, rsvpWindow } from '../../common/time';
 
-type Fn = typeof functions.$inferSelect;
-type Inv = typeof invites.$inferSelect;
-type Wed = typeof weddings.$inferSelect;
+type Fn = FnDoc;
+type Inv = Invite;
+type Wed = Wedding;
+type Row = { inv: Inv; fn: Fn; w: Wed; g: Guest };
 
 const VISIBLE = ['active', 'paused', 'ended'] as const;
 
@@ -23,32 +24,33 @@ export const couple = (w: Pick<Wed, 'bride' | 'groom'>) => `${w.bride.name.split
  */
 @Injectable()
 export class GuestService {
-  constructor(@InjectDb() private readonly db: DB) {}
-
   private async phoneOf(userId: string) {
-    const [u] = await this.db.select({ phone: users.phone, prefs: users.prefs }).from(users).where(eq(users.id, userId)).limit(1);
-    if (!u) throw notFound('Account');
-    return u;
+    const u = await getDoc<User>(col.users().doc(userId));
+    if (!u || u.deletedAt) throw notFound('Account');
+    return { phone: u.phone, prefs: u.prefs };
   }
 
-  /** every live invite row for this number, across all visible weddings */
-  private async myRows(phone: string, weddingId?: string) {
-    const conds = [
-      eq(guests.phone, phone),
-      eq(guests.active, true),
-      eq(invites.invited, true),
-      isNull(functions.deletedAt),
-      inArray(weddings.status, [...VISIBLE]),
-    ];
-    if (weddingId) conds.push(eq(weddings.id, weddingId));
-    return this.db
-      .select({ inv: invites, fn: functions, w: weddings, g: guests })
-      .from(invites)
-      .innerJoin(guests, eq(guests.id, invites.guestId))
-      .innerJoin(functions, eq(functions.id, invites.functionId))
-      .innerJoin(weddings, eq(weddings.id, invites.weddingId))
-      .where(and(...conds))
-      .orderBy(asc(functions.startsAt));
+  /** every live invite row for this number, across all visible weddings, by start time */
+  private async myRows(phone: string, weddingId?: string): Promise<Row[]> {
+    let gs = await getRows<Guest>(group.guests().where('phone', '==', phone).where('active', '==', true));
+    if (weddingId) gs = gs.filter((g) => g.weddingId === weddingId);
+    if (!gs.length) return [];
+    const ws = await byIds<Wedding>(col.weddings(), gs.map((g) => g.weddingId));
+    const out: Row[] = [];
+    await Promise.all(
+      gs.map(async (g) => {
+        const w = ws.get(g.weddingId);
+        if (!w || !(VISIBLE as readonly string[]).includes(w.status)) return;
+        const inv = await getRows<Inv>(col.invites(w.id).where('guestId', '==', g.id).where('invited', '==', true));
+        if (!inv.length) return;
+        const fns = await byIds<Fn>(col.functions(w.id), inv.map((i) => i.functionId));
+        for (const i of inv) {
+          const fn = fns.get(i.functionId);
+          if (fn && !fn.deletedAt) out.push({ inv: i, fn, w, g });
+        }
+      }),
+    );
+    return out.sort((a, b) => a.fn.startsAt.getTime() - b.fn.startsAt.getTime() || a.fn.sort - b.fn.sort);
   }
 
   private reminders(fn: Fn, inv: Inv, defaults: number[], now = new Date()) {
@@ -149,15 +151,9 @@ export class GuestService {
     const me = await this.phoneOf(userId);
     const rows = await this.myRows(me.phone);
     const now = new Date();
-    const byWedding = new Map<string, typeof rows>();
+    const byWedding = new Map<string, Row[]>();
     for (const r of rows) byWedding.set(r.w.id, [...(byWedding.get(r.w.id) ?? []), r]);
-    const covers = byWedding.size
-      ? await this.db
-          .select()
-          .from(weddingMedia)
-          .where(and(inArray(weddingMedia.weddingId, [...byWedding.keys()]), eq(weddingMedia.kind, 'cover')))
-          .orderBy(asc(weddingMedia.sort))
-      : [];
+    const covers = (await Promise.all([...byWedding.keys()].map((wid) => getRows<Media>(col.media(wid).where('kind', '==', 'cover'))))).flat().sort((a, b) => a.sort - b.sort);
     const cards = [...byWedding.values()].map((list) => {
       const w = list[0].w;
       const upcoming = list.filter((r) => !fnPast(r.fn, now));
@@ -217,17 +213,10 @@ export class GuestService {
     const w = rows[0].w;
     const clash = this.clashes(all);
     const defaults = this.defaultsFor(me.prefs);
-    const fns = await this.db
-      .select()
-      .from(functions)
-      .where(and(eq(functions.weddingId, w.id), isNull(functions.deletedAt)))
-      .orderBy(asc(functions.startsAt), asc(functions.sort));
+    const fns = (await getRows<Fn>(col.functions(w.id).where('deletedAt', '==', null))).sort((a, b) => a.startsAt.getTime() - b.startsAt.getTime() || a.sort - b.sort);
     const mineById = new Map(rows.map((r) => [r.fn.id, r.inv]));
-    const media = await this.db.select().from(weddingMedia).where(eq(weddingMedia.weddingId, w.id)).orderBy(asc(weddingMedia.sort));
-    const hosts = await this.db
-      .select({ name: weddingAccess.name, relation: weddingAccess.relation })
-      .from(weddingAccess)
-      .where(and(eq(weddingAccess.weddingId, w.id), isNull(weddingAccess.removedAt)));
+    const media = (await getRows<Media>(col.media(w.id))).sort((a, b) => a.sort - b.sort);
+    const hosts = (await getRows<Access>(col.access(w.id).where('removedAt', '==', null))).map((a) => ({ name: a.name, relation: a.relation }));
     const m = (kind: string) => media.filter((x) => x.kind === kind).map((x) => ({ id: x.id, type: x.type, url: x.url, posterUrl: x.posterUrl }));
     return {
       id: w.id,
@@ -287,21 +276,15 @@ export class GuestService {
     if (win.state === 'closed') throw new AppError('RSVP_CLOSED', 'Replies for this function closed 24 hours before it starts. The hosts will call you.', 409);
     if (win.state === 'never') throw new AppError('RSVP_NEVER', 'This function was added too close to the day for replies. The hosts will call you.', 409);
     const people = rsvp === 'going' ? Math.max(1, Math.min(pax || 1, 20)) : 0;
-    await this.db
-      .update(invites)
-      .set({ rsvp, pax: people, respondedAt: new Date(), byHost: false, updatedAt: new Date() })
-      .where(eq(invites.id, inv.id));
+    await col.invites(w.id).doc(inv.id).update({ rsvp, pax: people, respondedAt: F.now(), byHost: false, updatedAt: F.now() });
     return this.fn(userId, weddingId, functionId);
   }
 
   /** private reminders on the guest's own invite row — the host never sees these */
   async setReminders(userId: string, weddingId: string, functionId: string, offDefaults: number[], mine: number[]) {
-    const { inv } = await this.myInvite(userId, weddingId, functionId);
+    const { inv, w } = await this.myInvite(userId, weddingId, functionId);
     const clean = (a: number[]) => [...new Set(a.map((n) => Math.round(n)).filter((n) => n >= 5 && n <= 20160))].slice(0, 6);
-    await this.db
-      .update(invites)
-      .set({ offDefaults: clean(offDefaults), guestReminders: clean(mine), updatedAt: new Date() })
-      .where(eq(invites.id, inv.id));
+    await col.invites(w.id).doc(inv.id).update({ offDefaults: clean(offDefaults), guestReminders: clean(mine), updatedAt: F.now() });
     return this.fn(userId, weddingId, functionId);
   }
 

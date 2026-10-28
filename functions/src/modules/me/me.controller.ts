@@ -1,13 +1,11 @@
 import { Body, Controller, Delete, Get, HttpCode, Patch, Post, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { and, eq, isNull } from 'drizzle-orm';
 import { z } from 'zod';
 import { CurrentUser, UserClaims, UserGuard } from '../../common/auth';
 import { AppError } from '../../common/errors';
 import { Zod, zTime } from '../../common/zod';
-import { DB, InjectDb } from '../../db/db';
-import { users } from '../../db/schema';
+import { col } from '../../db/paths';
 import { StorageService } from '../infra/storage.service';
 import { AuthService } from '../auth/auth.service';
 import { phoneOrThrow } from '../auth/auth.controller';
@@ -43,7 +41,6 @@ export class MeController {
     private readonly me: MeService,
     private readonly storage: StorageService,
     private readonly auth: AuthService,
-    @InjectDb() private readonly db: DB,
   ) {}
 
   @Get()
@@ -108,7 +105,9 @@ export class MeController {
     const phone = phoneOrThrow(b.cc, b.mobile);
     await this.assertFree(phone);
     await this.auth.checkOtp(phone, b.code, 'change_number');
-    return this.me.changePhone(u.sub, phone);
+    // the new number is in the sign-in token, so the app signs in again with customToken
+    const r = await this.me.changePhone(u.sub, phone);
+    return { ...r.me, customToken: r.customToken };
   }
 
   @Get('export')
@@ -122,7 +121,7 @@ export class MeController {
   }
 
   private async assertFree(phone: string) {
-    const [taken] = await this.db.select({ id: users.id }).from(users).where(and(eq(users.phone, phone), isNull(users.deletedAt))).limit(1);
+    const taken = (await col.phones().doc(phone).get()).exists;
     if (taken) throw new AppError('PHONE_TAKEN', 'Another account already uses this number.', 409);
   }
 }

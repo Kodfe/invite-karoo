@@ -1,21 +1,8 @@
 import { Injectable } from '@nestjs/common';
-import { and, asc, count, desc, eq, ilike, inArray, isNull, notInArray, or, sql } from 'drizzle-orm';
 import ExcelJS from 'exceljs';
-import { DB, InjectDb, Tx } from '../../db/db';
-import {
-  ApplicationData,
-  blasts,
-  Family,
-  functions,
-  giftsReceived,
-  guests,
-  hostApplications,
-  invites,
-  Person,
-  weddingAccess,
-  weddingMedia,
-  weddings,
-} from '../../db/schema';
+import { col } from '../../db/paths';
+import { Access, Application, ApplicationData, Blast, Family, Fn, GiftReceived, Guest, Invite, inviteId, Media, Person, Wedding } from '../../db/models';
+import { Batch, byIds, db, F, getDoc, getRows, writeAll } from '../../db/store';
 import { AppError, conflict, notFound } from '../../common/errors';
 import { randomToken } from '../../common/crypto';
 import { prettyPhone, toE164 } from '../../common/phone';
@@ -73,10 +60,32 @@ export function fnStyle(name: string): { color: string; icon: string } {
   return { color, icon };
 }
 
+/** the live functions of a wedding, in running order */
+export async function liveFunctions(weddingId: string) {
+  const fns = await getRows<Fn>(col.functions(weddingId).where('deletedAt', '==', null));
+  return fns.sort((a, b) => a.startsAt.getTime() - b.startsAt.getTime() || a.sort - b.sort);
+}
+
+/** a new invite row (guest × function) */
+export function newInvite(weddingId: string, guestId: string, functionId: string, giftOut: boolean) {
+  return {
+    weddingId, guestId, functionId, invited: true, notifiedAt: null,
+    rsvp: 'none', pax: 0, respondedAt: null, byHost: false, remark: '',
+    giftOut, giftOutGiven: false, giftOutGivenAt: null, giftOutGivenBy: null, giftOutMethod: null,
+    callAttempts: 0, lastCalledAt: null, callOutcome: 'none',
+    guestReminders: [], offDefaults: [],
+    createdAt: F.now(), updatedAt: F.now(),
+  };
+}
+
+/** a new guest-list row */
+export function newGuest(weddingId: string, g: { name: string; phone: string; side: 'bride' | 'groom'; relation: string; expectedPax: number; notes: string }, via: Guest['createdVia']) {
+  return { weddingId, ...g, active: true, createdVia: via, qrToken: randomToken(12), createdAt: F.now(), updatedAt: F.now() };
+}
+
 @Injectable()
 export class AdminWeddingsService {
   constructor(
-    @InjectDb() private readonly db: DB,
     private readonly sheets: SheetService,
     private readonly storage: StorageService,
     private readonly notifications: NotificationsService,
@@ -90,25 +99,26 @@ export class AdminWeddingsService {
   }
 
   async list(q: { q?: string; status?: string; limit: number; offset: number }) {
-    const conds = [];
-    if (q.status) conds.push(eq(weddings.status, q.status as 'draft'));
+    let all = await getRows<Wedding>(q.status ? col.weddings().where('status', '==', q.status) : col.weddings());
     if (q.q) {
-      const like = `%${q.q}%`;
-      conds.push(or(ilike(sql`${weddings.bride}->>'name'`, like), ilike(sql`${weddings.groom}->>'name'`, like), ilike(weddings.city, like), ilike(weddings.ownerPhone, `%${q.q.replace(/\D/g, '') || 'x'}%`)));
+      const s = q.q.toLowerCase();
+      const digits = q.q.replace(/\D/g, '');
+      all = all.filter((w) => w.bride.name.toLowerCase().includes(s) || w.groom.name.toLowerCase().includes(s) || w.city.toLowerCase().includes(s) || (!!digits && w.ownerPhone.includes(digits)));
     }
-    const where = conds.length ? and(...conds) : undefined;
-    const rows = await this.db.select().from(weddings).where(where).orderBy(desc(weddings.startDate)).limit(q.limit).offset(q.offset);
-    const [{ n }] = await this.db.select({ n: count() }).from(weddings).where(where);
-    const ids = rows.map((r) => r.id);
-    const gc = ids.length
-      ? await this.db.select({ w: guests.weddingId, n: count() }).from(guests).where(and(inArray(guests.weddingId, ids), eq(guests.active, true))).groupBy(guests.weddingId)
-      : [];
-    const fc = ids.length
-      ? await this.db.select({ w: functions.weddingId, n: count() }).from(functions).where(and(inArray(functions.weddingId, ids), isNull(functions.deletedAt))).groupBy(functions.weddingId)
-      : [];
+    all.sort((a, b) => b.startDate.localeCompare(a.startDate));
+    const page = all.slice(q.offset, q.offset + q.limit);
+    const counts = await Promise.all(
+      page.map(async (w) => {
+        const [g, f] = await Promise.all([
+          col.guests(w.id).where('active', '==', true).count().get(),
+          col.functions(w.id).where('deletedAt', '==', null).count().get(),
+        ]);
+        return { g: g.data().count, f: f.data().count };
+      }),
+    );
     return {
-      total: n,
-      items: rows.map((w) => ({
+      total: all.length,
+      items: page.map((w, i) => ({
         id: w.id,
         couple: couple(w),
         bride: w.bride.name,
@@ -119,34 +129,33 @@ export class AdminWeddingsService {
         status: w.status,
         ownerPhone: prettyPhone(w.ownerPhone),
         handedOverAt: w.handedOverAt,
-        guests: gc.find((x) => x.w === w.id)?.n ?? 0,
-        functions: fc.find((x) => x.w === w.id)?.n ?? 0,
+        guests: counts[i].g,
+        functions: counts[i].f,
       })),
     };
   }
 
   async get(id: string) {
-    const [w] = await this.db.select().from(weddings).where(eq(weddings.id, id)).limit(1);
-    if (!w) throw notFound('Wedding');
-    const fns = await this.db.select().from(functions).where(and(eq(functions.weddingId, id), isNull(functions.deletedAt))).orderBy(asc(functions.startsAt), asc(functions.sort));
-    const counts = await this.db
-      .select({ fn: invites.functionId, rsvp: invites.rsvp, n: count(), gifts: sql<number>`sum(case when ${invites.giftOut} then 1 else 0 end)` })
-      .from(invites)
-      .innerJoin(guests, eq(guests.id, invites.guestId))
-      .where(and(eq(invites.weddingId, id), eq(invites.invited, true), eq(guests.active, true)))
-      .groupBy(invites.functionId, invites.rsvp);
-    const media = await this.db.select().from(weddingMedia).where(eq(weddingMedia.weddingId, id)).orderBy(asc(weddingMedia.kind), asc(weddingMedia.sort));
-    const access = await this.db.select().from(weddingAccess).where(and(eq(weddingAccess.weddingId, id), isNull(weddingAccess.removedAt)));
-    const bl = await this.db.select().from(blasts).where(eq(blasts.weddingId, id));
-    const [{ n: guestCount }] = await this.db.select({ n: count() }).from(guests).where(and(eq(guests.weddingId, id), eq(guests.active, true)));
+    const w = await this.wedding(id);
+    const [fns, inv, gs, media, access, bl] = await Promise.all([
+      liveFunctions(id),
+      getRows<Invite>(col.invites(id).where('invited', '==', true)),
+      getRows<Guest>(col.guests(id).where('active', '==', true)),
+      getRows<Media>(col.media(id)),
+      getRows<Access>(col.access(id).where('removedAt', '==', null)),
+      getRows<Blast>(col.blasts(id)),
+    ]);
+    const activeGuests = new Set(gs.map((g) => g.id));
+    const live = inv.filter((i) => activeGuests.has(i.guestId));
+    media.sort((a, b) => a.kind.localeCompare(b.kind) || a.sort - b.sort);
     return {
       ...w,
       ownerPhonePretty: prettyPhone(w.ownerPhone),
       couple: couple(w),
-      guestCount,
+      guestCount: gs.length,
       functions: fns.map((f) => {
         const lp = localParts(f.startsAt, w.timezone);
-        const c = counts.filter((x) => x.fn === f.id);
+        const c = live.filter((x) => x.functionId === f.id);
         return {
           ...f,
           date: lp.date,
@@ -154,9 +163,9 @@ export class AdminWeddingsService {
           end: f.endsAt ? localParts(f.endsAt, w.timezone).time : null,
           dayLabel: dayLabel(f.startsAt, w.timezone),
           timeLabel: clock12(f.startsAt, w.timezone),
-          invited: c.reduce((a, x) => a + x.n, 0),
-          going: c.find((x) => x.rsvp === 'going')?.n ?? 0,
-          giftOut: c.reduce((a, x) => a + Number(x.gifts ?? 0), 0),
+          invited: c.length,
+          going: c.filter((x) => x.rsvp === 'going').length,
+          giftOut: c.filter((x) => x.giftOut).length,
           blasts: bl.filter((b) => b.functionId === f.id).map((b) => ({ kind: b.kind, state: b.state, sentAt: b.sentAt, recipientCount: b.recipientCount })),
         };
       }),
@@ -168,45 +177,51 @@ export class AdminWeddingsService {
   async create(input: WeddingInput, adminId: string, applicationId?: string) {
     const ownerPhone = this.phone(input.ownerPhone, 'ownerPhone');
     const contactPhone = input.contactPhone ? this.phone(input.contactPhone, 'contactPhone') : null;
-    const [w] = await this.db
-      .insert(weddings)
-      .values({
-        ownerPhone,
-        contactPhone,
-        city: input.city,
-        timezone: input.timezone ?? 'Asia/Kolkata',
-        startDate: input.startDate,
-        endDate: input.endDate,
-        datesLocked: input.datesLocked ?? true,
-        bride: input.bride,
-        groom: input.groom,
-        brideFamily: input.brideFamily,
-        groomFamily: input.groomFamily,
-        applicationId,
-        createdBy: adminId,
-      })
-      .returning();
-    await this.audit.log({ type: 'admin', id: adminId }, 'wedding.create', w.id);
-    return w;
+    const ref = col.weddings().doc();
+    await ref.set({
+      ownerPhone,
+      contactPhone,
+      city: input.city,
+      timezone: input.timezone ?? 'Asia/Kolkata',
+      startDate: input.startDate,
+      endDate: input.endDate,
+      datesLocked: input.datesLocked ?? true,
+      status: 'draft',
+      statusReason: null,
+      sendingEnabled: true,
+      bride: input.bride,
+      groom: input.groom,
+      brideFamily: input.brideFamily,
+      groomFamily: input.groomFamily,
+      card: null,
+      voice: null,
+      applicationId: applicationId ?? null,
+      handedOverAt: null,
+      endedAt: null,
+      createdBy: adminId,
+      createdAt: F.now(),
+      updatedAt: F.now(),
+    });
+    await this.audit.log({ type: 'admin', id: adminId }, 'wedding.create', ref.id);
+    return this.wedding(ref.id);
   }
 
   async update(id: string, patch: Partial<WeddingInput & { status: 'draft' | 'active' | 'paused' | 'ended'; statusReason: string | null; sendingEnabled: boolean }>, adminId: string) {
-    const [w] = await this.db.select().from(weddings).where(eq(weddings.id, id)).limit(1);
-    if (!w) throw notFound('Wedding');
-    const set: Partial<typeof weddings.$inferInsert> = { updatedAt: new Date() };
+    const w = await this.wedding(id);
+    const set: Record<string, unknown> = { updatedAt: F.now() };
     const keys = ['city', 'timezone', 'startDate', 'endDate', 'datesLocked', 'bride', 'groom', 'brideFamily', 'groomFamily', 'status', 'statusReason', 'sendingEnabled'] as const;
-    for (const k of keys) if (patch[k] !== undefined) (set as Record<string, unknown>)[k] = patch[k];
+    for (const k of keys) if (patch[k] !== undefined) set[k] = patch[k];
     if (patch.ownerPhone) set.ownerPhone = this.phone(patch.ownerPhone, 'ownerPhone');
     if (patch.contactPhone !== undefined) set.contactPhone = patch.contactPhone ? this.phone(patch.contactPhone, 'contactPhone') : null;
-    if (patch.status === 'ended' && !w.endedAt) set.endedAt = new Date();
-    await this.db.update(weddings).set(set).where(eq(weddings.id, id));
+    if (patch.status === 'ended' && !w.endedAt) set.endedAt = F.now();
+    await col.weddings().doc(id).update(set);
     await this.audit.log({ type: 'admin', id: adminId }, 'wedding.update', id, { fields: Object.keys(set) });
     return this.get(id);
   }
 
   /* ───────────── functions ───────────── */
 
-  private fnValues(w: typeof weddings.$inferSelect, f: FunctionInput) {
+  fnValues(w: Wedding, f: FunctionInput) {
     const startsAt = zonedDate(f.date, f.start, w.timezone);
     let endsAt: Date | null = null;
     if (f.end) {
@@ -232,9 +247,15 @@ export class AdminWeddingsService {
   }
 
   private async wedding(id: string) {
-    const [w] = await this.db.select().from(weddings).where(eq(weddings.id, id)).limit(1);
+    const w = await getDoc<Wedding>(col.weddings().doc(id));
     if (!w) throw notFound('Wedding');
     return w;
+  }
+
+  private async fn(weddingId: string, fnId: string) {
+    const f = await getDoc<Fn>(col.functions(weddingId).doc(fnId));
+    if (!f || f.deletedAt) throw notFound('Function');
+    return f;
   }
 
   async addFunction(weddingId: string, f: FunctionInput, adminId: string) {
@@ -242,15 +263,15 @@ export class AdminWeddingsService {
     if (w.datesLocked && (f.date < w.startDate || f.date > w.endDate)) {
       throw new AppError('OUTSIDE_DATES', `This date is outside the wedding’s dates (${w.startDate} to ${w.endDate})`, 422, { date: 'Outside the wedding dates' });
     }
-    const [row] = await this.db.insert(functions).values({ weddingId, ...this.fnValues(w, f) }).returning();
-    await this.audit.log({ type: 'admin', id: adminId }, 'function.add', weddingId, { functionId: row.id });
-    return row;
+    const ref = col.functions(weddingId).doc();
+    await ref.set({ weddingId, ...this.fnValues(w, f), createdAt: F.now(), updatedAt: F.now(), deletedAt: null });
+    await this.audit.log({ type: 'admin', id: adminId }, 'function.add', weddingId, { functionId: ref.id });
+    return this.fn(weddingId, ref.id);
   }
 
   async updateFunction(weddingId: string, fnId: string, f: Partial<FunctionInput>, adminId: string) {
     const w = await this.wedding(weddingId);
-    const [cur] = await this.db.select().from(functions).where(and(eq(functions.id, fnId), eq(functions.weddingId, weddingId), isNull(functions.deletedAt))).limit(1);
-    if (!cur) throw notFound('Function');
+    const cur = await this.fn(weddingId, fnId);
     const lp = localParts(cur.startsAt, w.timezone);
     const merged: FunctionInput = {
       name: f.name ?? cur.name,
@@ -268,17 +289,16 @@ export class AdminWeddingsService {
       sort: f.sort ?? cur.sort,
     };
     const vals = this.fnValues(w, merged);
-    const [row] = await this.db.update(functions).set({ ...vals, updatedAt: new Date() }).where(eq(functions.id, fnId)).returning();
+    await col.functions(weddingId).doc(fnId).update({ ...vals, updatedAt: F.now() });
+    const row = await this.fn(weddingId, fnId);
     const moved = vals.startsAt.getTime() !== cur.startsAt.getTime();
     const venueChanged = vals.venueName !== cur.venueName || vals.venueAddress !== cur.venueAddress;
     // reminder kind 5: the guest is TOLD. Their reminders moved with it (they are offsets).
     if ((moved || venueChanged) && w.status === 'active') {
-      const rows = await this.db
-        .select({ phone: guests.phone })
-        .from(invites)
-        .innerJoin(guests, eq(guests.id, invites.guestId))
-        .where(and(eq(invites.functionId, fnId), eq(invites.invited, true), eq(guests.active, true)));
-      const users = await this.notifications.usersByPhone(rows.map((r) => r.phone));
+      const inv = await getRows<Invite>(col.invites(weddingId).where('functionId', '==', fnId).where('invited', '==', true));
+      const gs = await byIds<Guest>(col.guests(weddingId), inv.map((i) => i.guestId));
+      const phones = [...gs.values()].filter((g) => g.active).map((g) => g.phone);
+      const users = await this.notifications.usersByPhone(phones);
       const what = moved ? `now ${dayLabel(vals.startsAt, w.timezone)}, ${clock12(vals.startsAt, w.timezone)}` : `now at ${vals.venueName}`;
       await this.notifications.notify([...users.values()].map((u) => u.id), {
         cat: 'rem',
@@ -294,12 +314,8 @@ export class AdminWeddingsService {
   }
 
   async deleteFunction(weddingId: string, fnId: string, adminId: string) {
-    const [row] = await this.db
-      .update(functions)
-      .set({ deletedAt: new Date() })
-      .where(and(eq(functions.id, fnId), eq(functions.weddingId, weddingId), isNull(functions.deletedAt)))
-      .returning();
-    if (!row) throw notFound('Function');
+    await this.fn(weddingId, fnId);
+    await col.functions(weddingId).doc(fnId).update({ deletedAt: F.now() });
     await this.audit.log({ type: 'admin', id: adminId }, 'function.delete', weddingId, { functionId: fnId });
     return { ok: true };
   }
@@ -325,7 +341,7 @@ export class AdminWeddingsService {
     return this.applyParsed(w, parsed, opts, adminId);
   }
 
-  async applyParsed(w: typeof weddings.$inferSelect, parsed: ParsedSheet, opts: { mode: 'merge' | 'replace'; dryRun: boolean; createFunctions: boolean }, adminId: string) {
+  async applyParsed(w: Wedding, parsed: ParsedSheet, opts: { mode: 'merge' | 'replace'; dryRun: boolean; createFunctions: boolean }, adminId: string) {
     // the parser judges the Functions sheet on its own; here what counts is whether every
     // function column maps to a function this wedding has, or one we can create from the sheet
     const sheetLevel = parsed.report.errors.filter((e) => !/Functions sheet/.test(e));
@@ -335,7 +351,7 @@ export class AdminWeddingsService {
       if (!rep.errors.length) rep.errors.push('No usable guest rows were found in the sheet.');
       return result;
     }
-    const existingFns = await this.db.select().from(functions).where(and(eq(functions.weddingId, w.id), isNull(functions.deletedAt)));
+    const existingFns = await liveFunctions(w.id);
     const byName = new Map(existingFns.map((f) => [f.name.toLowerCase(), f.id]));
     const toCreate: ParsedFunction[] = [];
     for (const name of rep.functions) {
@@ -349,7 +365,7 @@ export class AdminWeddingsService {
     }
     result.functionsCreated = toCreate.map((f) => f.name);
     if (rep.errors.length) return result;
-    const existing = await this.db.select().from(guests).where(eq(guests.weddingId, w.id));
+    const existing = await getRows<Guest>(col.guests(w.id));
     const live = new Map(existing.filter((g) => g.active).map((g) => [g.phone, g]));
     const dead = new Map(existing.filter((g) => !g.active).map((g) => [g.phone, g]));
     const sheetPhones = new Set(parsed.guests.map((g) => g.phone));
@@ -360,80 +376,70 @@ export class AdminWeddingsService {
     if (opts.mode === 'replace') result.removed = [...live.keys()].filter((p) => !sheetPhones.has(p)).length;
     if (opts.dryRun) return result;
 
-    await this.db.transaction(async (tx: Tx) => {
-      for (const pf of toCreate) {
-        const [f] = await tx
-          .insert(functions)
-          .values({
-            weddingId: w.id,
-            ...this.fnValues(w, {
-              name: pf.name,
-              date: pf.date!,
-              start: pf.start!,
-              end: pf.end,
-              venueName: pf.venueName || 'Venue to be announced',
-              venueAddress: pf.venueAddress || null,
-              dressCode: pf.dressCode || null,
-              notes: pf.notes || null,
-              sort: parsed.functions.indexOf(pf),
-            }),
-          })
-          .returning();
-        byName.set(f.name.toLowerCase(), f.id);
-      }
-      for (const g of parsed.guests) {
-        const prev = live.get(g.phone) ?? dead.get(g.phone);
-        let guestId: string;
-        if (prev) {
-          await tx
-            .update(guests)
-            .set({ name: g.name, side: g.side, relation: g.relation, expectedPax: g.expectedPax, notes: g.notes, active: true, updatedAt: new Date() })
-            .where(eq(guests.id, prev.id));
-          guestId = prev.id;
-        } else {
-          const [row] = await tx
-            .insert(guests)
-            .values({ weddingId: w.id, name: g.name, phone: g.phone, side: g.side, relation: g.relation, expectedPax: g.expectedPax, notes: g.notes, createdVia: 'xls', qrToken: randomToken(12) })
-            .returning({ id: guests.id });
-          guestId = row.id;
+    const ops: ((b: Batch) => void)[] = [];
+    for (const pf of toCreate) {
+      const ref = col.functions(w.id).doc();
+      const vals = this.fnValues(w, {
+        name: pf.name,
+        date: pf.date!,
+        start: pf.start!,
+        end: pf.end,
+        venueName: pf.venueName || 'Venue to be announced',
+        venueAddress: pf.venueAddress || null,
+        dressCode: pf.dressCode || null,
+        notes: pf.notes || null,
+        sort: parsed.functions.indexOf(pf),
+      });
+      ops.push((b) => b.set(ref, { weddingId: w.id, ...vals, createdAt: F.now(), updatedAt: F.now(), deletedAt: null }));
+      byName.set(vals.name.toLowerCase(), ref.id);
+    }
+    const invites = new Map((await getRows<Invite>(col.invites(w.id))).map((i) => [i.id, i]));
+    for (const g of parsed.guests) {
+      const prev = live.get(g.phone) ?? dead.get(g.phone);
+      const gRef = prev ? col.guests(w.id).doc(prev.id) : col.guests(w.id).doc();
+      const fields = { name: g.name, side: g.side, relation: g.relation, expectedPax: g.expectedPax, notes: g.notes };
+      if (prev) ops.push((b) => b.update(gRef, { ...fields, active: true, updatedAt: F.now() }));
+      else ops.push((b) => b.set(gRef, newGuest(w.id, { ...fields, phone: g.phone }, 'xls')));
+      const fnIds = new Set<string>();
+      for (const f of g.fns) {
+        const functionId = byName.get(f.name.toLowerCase())!;
+        fnIds.add(functionId);
+        const iid = inviteId(gRef.id, functionId);
+        const ref = col.invites(w.id).doc(iid);
+        if (invites.has(iid)) ops.push((b) => b.update(ref, { invited: true, giftOut: f.gift, updatedAt: F.now() }));
+        else {
+          result.invitesAdded++;
+          ops.push((b) => b.set(ref, newInvite(w.id, gRef.id, functionId, f.gift)));
         }
-        const fnIds = new Set<string>();
-        for (const f of g.fns) {
-          const functionId = byName.get(f.name.toLowerCase())!;
-          fnIds.add(functionId);
-          const r = await tx
-            .insert(invites)
-            .values({ weddingId: w.id, guestId, functionId, invited: true, giftOut: f.gift })
-            .onConflictDoUpdate({ target: [invites.guestId, invites.functionId], set: { invited: true, giftOut: f.gift, updatedAt: new Date() } })
-            .returning({ created: sql<boolean>`xmax = 0` });
-          if (r[0]?.created) result.invitesAdded++;
-        }
-        // the sheet is the truth for this guest's functions: functions marked N are taken off
-        const ownFns = [...fnIds];
-        await tx
-          .update(invites)
-          .set({ invited: false, updatedAt: new Date() })
-          .where(and(eq(invites.guestId, guestId), ownFns.length ? notInArray(invites.functionId, ownFns) : undefined));
       }
-      if (opts.mode === 'replace') {
-        const gone = [...live.values()].filter((g) => !sheetPhones.has(g.phone)).map((g) => g.id);
-        if (gone.length) await tx.update(guests).set({ active: false, updatedAt: new Date() }).where(inArray(guests.id, gone));
+      // the sheet is the truth for this guest's functions: functions marked N are taken off
+      for (const i of invites.values()) {
+        if (i.guestId === gRef.id && i.invited && !fnIds.has(i.functionId)) ops.push((b) => b.update(col.invites(w.id).doc(i.id), { invited: false, updatedAt: F.now() }));
       }
-      await this.audit.log({ type: 'admin', id: adminId }, 'guests.import', w.id, { added: result.added, updated: result.updated, removed: result.removed }, tx);
-    });
+    }
+    if (opts.mode === 'replace') {
+      for (const g of live.values()) if (!sheetPhones.has(g.phone)) ops.push((b) => b.update(col.guests(w.id).doc(g.id), { active: false, updatedAt: F.now() }));
+    }
+    await writeAll(ops);
+    await this.audit.log({ type: 'admin', id: adminId }, 'guests.import', w.id, { added: result.added, updated: result.updated, removed: result.removed });
     return result;
   }
 
   async guests(weddingId: string, q: { q?: string; limit: number; offset: number; removed?: boolean }) {
     await this.wedding(weddingId);
-    const conds = [eq(guests.weddingId, weddingId), eq(guests.active, !q.removed)];
-    if (q.q) conds.push(or(ilike(guests.name, `%${q.q}%`), ilike(guests.phone, `%${q.q.replace(/\D/g, '') || 'x'}%`))!);
-    const rows = await this.db.select().from(guests).where(and(...conds)).orderBy(asc(guests.name)).limit(q.limit).offset(q.offset);
-    const [{ n }] = await this.db.select({ n: count() }).from(guests).where(and(...conds));
-    const inv = rows.length ? await this.db.select().from(invites).where(and(inArray(invites.guestId, rows.map((r) => r.id)), eq(invites.invited, true))) : [];
+    let all = await getRows<Guest>(col.guests(weddingId).where('active', '==', !q.removed));
+    if (q.q) {
+      const s = q.q.toLowerCase();
+      const digits = q.q.replace(/\D/g, '');
+      all = all.filter((g) => g.name.toLowerCase().includes(s) || (!!digits && g.phone.includes(digits)));
+    }
+    all.sort((a, b) => a.name.localeCompare(b.name));
+    const page = all.slice(q.offset, q.offset + q.limit);
+    const ids = new Set(page.map((g) => g.id));
+    const inv = page.length ? (await getRows<Invite>(col.invites(weddingId).where('invited', '==', true))).filter((i) => ids.has(i.guestId)) : [];
     return {
-      total: n,
-      items: rows.map((g) => ({
+      total: all.length,
+      items: page.map((g) => ({
         ...g,
         phonePretty: prettyPhone(g.phone),
         functions: inv.filter((i) => i.guestId === g.id).map((i) => ({ functionId: i.functionId, rsvp: i.rsvp, pax: i.pax, giftOut: i.giftOut, giftOutGiven: i.giftOutGiven })),
@@ -449,45 +455,42 @@ export class AdminWeddingsService {
   ) {
     await this.wedding(weddingId);
     const phone = this.phone(b.phone, 'phone');
-    const fnRows = await this.db.select({ id: functions.id }).from(functions).where(and(eq(functions.weddingId, weddingId), isNull(functions.deletedAt)));
-    for (const f of b.functions) if (!fnRows.some((x) => x.id === f.functionId)) throw notFound('Function');
-    return this.db.transaction(async (tx) => {
-      const [dupe] = await tx.select().from(guests).where(and(eq(guests.weddingId, weddingId), eq(guests.phone, phone), eq(guests.active, true))).limit(1);
-      if (dupe && dupe.id !== guestId) throw conflict('GUEST_EXISTS', `${dupe.name} already has this number`);
-      let id = guestId;
-      if (id) {
-        const [g] = await tx
-          .update(guests)
-          .set({ name: b.name, phone, side: b.side, relation: b.relation, expectedPax: b.expectedPax, notes: b.notes, updatedAt: new Date() })
-          .where(and(eq(guests.id, id), eq(guests.weddingId, weddingId)))
-          .returning();
-        if (!g) throw notFound('Guest');
-      } else {
-        const [g] = await tx
-          .insert(guests)
-          .values({ weddingId, name: b.name, phone, side: b.side, relation: b.relation, expectedPax: b.expectedPax, notes: b.notes, createdVia: 'admin', qrToken: randomToken(12) })
-          .returning();
-        id = g.id;
+    const fns = await liveFunctions(weddingId);
+    for (const f of b.functions) if (!fns.some((x) => x.id === f.functionId)) throw notFound('Function');
+    const id = await db().runTransaction(async (tx) => {
+      const dupes = await tx.get(col.guests(weddingId).where('phone', '==', phone).where('active', '==', true));
+      const dupe = dupes.docs.find((d) => d.id !== guestId);
+      if (dupe) throw conflict('GUEST_EXISTS', `${(dupe.data() as Guest).name} already has this number`);
+      const current = await tx.get(col.invites(weddingId).where('guestId', '==', guestId ?? '-'));
+      if (guestId) {
+        const g = await tx.get(col.guests(weddingId).doc(guestId));
+        if (!g.exists) throw notFound('Guest');
       }
+      const gRef = guestId ? col.guests(weddingId).doc(guestId) : col.guests(weddingId).doc();
+      const fields = { name: b.name, phone, side: b.side, relation: b.relation, expectedPax: b.expectedPax, notes: b.notes };
+      if (guestId) tx.update(gRef, { ...fields, updatedAt: F.now() });
+      else tx.set(gRef, newGuest(weddingId, fields, 'admin'));
+      const have = new Set(current.docs.map((d) => d.id));
       for (const f of b.functions) {
-        await tx
-          .insert(invites)
-          .values({ weddingId, guestId: id, functionId: f.functionId, invited: true, giftOut: f.giftOut })
-          .onConflictDoUpdate({ target: [invites.guestId, invites.functionId], set: { invited: true, giftOut: f.giftOut, updatedAt: new Date() } });
+        const ref = col.invites(weddingId).doc(inviteId(gRef.id, f.functionId));
+        if (have.has(ref.id)) tx.update(ref, { invited: true, giftOut: f.giftOut, updatedAt: F.now() });
+        else tx.set(ref, newInvite(weddingId, gRef.id, f.functionId, f.giftOut));
       }
-      const keep = b.functions.map((f) => f.functionId);
-      await tx
-        .update(invites)
-        .set({ invited: false, updatedAt: new Date() })
-        .where(and(eq(invites.guestId, id), keep.length ? notInArray(invites.functionId, keep) : undefined));
-      await this.audit.log({ type: 'admin', id: adminId }, guestId ? 'guest.update' : 'guest.add', weddingId, { guestId: id }, tx);
-      return { id };
+      const keep = new Set(b.functions.map((f) => f.functionId));
+      for (const d of current.docs) {
+        const i = d.data() as Invite;
+        if (!keep.has(i.functionId) && i.invited) tx.update(d.ref, { invited: false, updatedAt: F.now() });
+      }
+      return gRef.id;
     });
+    await this.audit.log({ type: 'admin', id: adminId }, guestId ? 'guest.update' : 'guest.add', weddingId, { guestId: id });
+    return { id };
   }
 
   async setGuestActive(weddingId: string, guestId: string, active: boolean, adminId: string) {
-    const [g] = await this.db.update(guests).set({ active, updatedAt: new Date() }).where(and(eq(guests.id, guestId), eq(guests.weddingId, weddingId))).returning();
+    const g = await getDoc<Guest>(col.guests(weddingId).doc(guestId));
     if (!g) throw notFound('Guest');
+    await col.guests(weddingId).doc(guestId).update({ active, updatedAt: F.now() });
     await this.audit.log({ type: 'admin', id: adminId }, active ? 'guest.restore' : 'guest.remove', weddingId, { guestId });
     return { ok: true };
   }
@@ -495,10 +498,10 @@ export class AdminWeddingsService {
   /** the whole list back out as a workbook, in the same shape it came in */
   async exportGuests(weddingId: string) {
     const w = await this.wedding(weddingId);
-    const fns = await this.db.select().from(functions).where(and(eq(functions.weddingId, weddingId), isNull(functions.deletedAt))).orderBy(asc(functions.startsAt));
-    const gs = await this.db.select().from(guests).where(and(eq(guests.weddingId, weddingId), eq(guests.active, true))).orderBy(asc(guests.name));
-    const inv = gs.length ? await this.db.select().from(invites).where(and(eq(invites.weddingId, weddingId), eq(invites.invited, true))) : [];
-    const gifts = await this.db.select().from(giftsReceived).where(and(eq(giftsReceived.weddingId, weddingId), isNull(giftsReceived.deletedAt)));
+    const fns = await liveFunctions(weddingId);
+    const gs = (await getRows<Guest>(col.guests(weddingId).where('active', '==', true))).sort((a, b) => a.name.localeCompare(b.name));
+    const inv = gs.length ? await getRows<Invite>(col.invites(weddingId).where('invited', '==', true)) : [];
+    const gifts = await getRows<GiftReceived>(col.gifts(weddingId).where('deletedAt', '==', null));
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet('Guests');
     const head = ['Guest Name', 'Mobile', 'Side', 'Relation', 'Expected Pax', 'Notes'];
@@ -530,26 +533,27 @@ export class AdminWeddingsService {
     this.storage.check(isVideo ? 'video' : 'image', file);
     if (isVideo && kind !== 'cover') throw new AppError('VIDEO_COVER_ONLY', 'Videos can only go in the cover carousel', 422);
     if (isVideo) {
-      const [{ n }] = await this.db.select({ n: count() }).from(weddingMedia).where(and(eq(weddingMedia.weddingId, weddingId), eq(weddingMedia.type, 'video')));
+      const n = (await col.media(weddingId).where('type', '==', 'video').count().get()).data().count;
       if (n >= 1) throw conflict('ONE_VIDEO', 'The cover can carry at most one video');
     }
     const s = await this.storage.put(`weddings/${weddingId}/${kind}`, file);
-    const [{ n: sort }] = await this.db.select({ n: count() }).from(weddingMedia).where(and(eq(weddingMedia.weddingId, weddingId), eq(weddingMedia.kind, kind)));
-    const [row] = await this.db.insert(weddingMedia).values({ weddingId, kind, type: isVideo ? 'video' : 'image', key: s.key, url: s.url, sort }).returning();
-    return row;
+    const sort = (await col.media(weddingId).where('kind', '==', kind).count().get()).data().count;
+    const ref = col.media(weddingId).doc();
+    await ref.set({ weddingId, kind, type: isVideo ? 'video' : 'image', key: s.key, url: s.url, posterUrl: null, sort, createdAt: F.now() });
+    return getDoc<Media>(ref);
   }
 
   async removeMedia(weddingId: string, mediaId: string) {
-    const [m] = await this.db.delete(weddingMedia).where(and(eq(weddingMedia.id, mediaId), eq(weddingMedia.weddingId, weddingId))).returning();
+    const m = await getDoc<Media>(col.media(weddingId).doc(mediaId));
     if (!m) throw notFound('Photo');
+    await col.media(weddingId).doc(mediaId).delete();
     await this.storage.remove(m.key);
     return { ok: true };
   }
 
   async reorderMedia(weddingId: string, ids: string[]) {
-    await this.db.transaction(async (tx) => {
-      for (const [i, id] of ids.entries()) await tx.update(weddingMedia).set({ sort: i }).where(and(eq(weddingMedia.id, id), eq(weddingMedia.weddingId, weddingId)));
-    });
+    const have = await byIds<Media>(col.media(weddingId), ids);
+    await writeAll(ids.filter((id) => have.has(id)).map((id, i) => (b) => b.update(col.media(weddingId).doc(id), { sort: i })));
     return { ok: true };
   }
 
@@ -561,7 +565,7 @@ export class AdminWeddingsService {
     const pageUrls: string[] = [];
     for (const p of pages) pageUrls.push((await this.storage.put(`weddings/${weddingId}/card`, p)).url);
     if (w.card?.key) await this.storage.remove(w.card.key);
-    await this.db.update(weddings).set({ card: { key: s.key, name: s.name, size: s.size, pages: pageUrls }, updatedAt: new Date() }).where(eq(weddings.id, weddingId));
+    await col.weddings().doc(weddingId).update({ card: { key: s.key, name: s.name, size: s.size, pages: pageUrls }, updatedAt: F.now() });
     return this.get(weddingId);
   }
 
@@ -570,7 +574,7 @@ export class AdminWeddingsService {
     this.storage.check('audio', audio);
     const s: Stored = await this.storage.put(`weddings/${weddingId}/voice`, audio);
     if (w.voice?.key) await this.storage.remove(w.voice.key);
-    await this.db.update(weddings).set({ voice: { key: s.key, url: s.url, durationSec }, updatedAt: new Date() }).where(eq(weddings.id, weddingId));
+    await col.weddings().doc(weddingId).update({ voice: { key: s.key, url: s.url, durationSec: durationSec ?? null }, updatedAt: F.now() });
     return this.get(weddingId);
   }
 
@@ -578,8 +582,7 @@ export class AdminWeddingsService {
     const w = await this.wedding(weddingId);
     this.storage.check('image', img);
     const s = await this.storage.put(`weddings/${weddingId}/people`, img);
-    const cur = w[who];
-    await this.db.update(weddings).set({ [who]: { ...cur, photoUrl: s.url }, updatedAt: new Date() }).where(eq(weddings.id, weddingId));
+    await col.weddings().doc(weddingId).update({ [who]: { ...w[who], photoUrl: s.url }, updatedAt: F.now() });
     return this.get(weddingId);
   }
 
@@ -588,14 +591,15 @@ export class AdminWeddingsService {
   async addAccess(weddingId: string, b: { name: string; phone: string; relation: string }, adminId: string) {
     await this.wedding(weddingId);
     const phone = this.phone(b.phone, 'phone');
-    const live = await this.db.select().from(weddingAccess).where(and(eq(weddingAccess.weddingId, weddingId), isNull(weddingAccess.removedAt)));
+    const live = await getRows<Access>(col.access(weddingId).where('removedAt', '==', null));
     if (live.some((a) => a.phone === phone)) throw conflict('ALREADY_MEMBER', 'This number already has access');
-    await this.db.insert(weddingAccess).values({ weddingId, phone, name: b.name, relation: b.relation, role: 'cohost', addedBy: `admin:${adminId}` });
+    await col.access(weddingId).doc().set({ weddingId, phone, name: b.name, relation: b.relation, role: 'cohost', addedBy: `admin:${adminId}`, addedAt: F.now(), removedAt: null });
     return this.get(weddingId);
   }
 
   async removeAccess(weddingId: string, accessId: string) {
-    await this.db.update(weddingAccess).set({ removedAt: new Date() }).where(and(eq(weddingAccess.id, accessId), eq(weddingAccess.weddingId, weddingId)));
+    const a = await getDoc<Access>(col.access(weddingId).doc(accessId));
+    if (a && !a.removedAt) await col.access(weddingId).doc(accessId).update({ removedAt: F.now() });
     return this.get(weddingId);
   }
 
@@ -604,12 +608,15 @@ export class AdminWeddingsService {
   /** opens the console on the owner's number and makes the wedding visible to guests */
   async handover(weddingId: string, adminId: string) {
     const w = await this.wedding(weddingId);
-    const [{ n: fnCount }] = await this.db.select({ n: count() }).from(functions).where(and(eq(functions.weddingId, weddingId), isNull(functions.deletedAt)));
-    const [{ n: guestCount }] = await this.db.select({ n: count() }).from(guests).where(and(eq(guests.weddingId, weddingId), eq(guests.active, true)));
+    const fnCount = (await col.functions(weddingId).where('deletedAt', '==', null).count().get()).data().count;
+    const guestCount = (await col.guests(weddingId).where('active', '==', true).count().get()).data().count;
     if (!fnCount) throw new AppError('NO_FUNCTIONS', 'Add at least one function before handing over', 409);
     if (!guestCount) throw new AppError('NO_GUESTS', 'Import the guest list before handing over', 409);
-    await this.db.update(weddings).set({ status: 'active', handedOverAt: w.handedOverAt ?? new Date(), updatedAt: new Date() }).where(eq(weddings.id, weddingId));
-    if (w.applicationId) await this.db.update(hostApplications).set({ status: 'live', updatedAt: new Date() }).where(eq(hostApplications.id, w.applicationId));
+    await col.weddings().doc(weddingId).update({ status: 'active', handedOverAt: w.handedOverAt ?? F.now(), updatedAt: F.now() });
+    if (w.applicationId) {
+      const app = col.applications().doc(w.applicationId);
+      if ((await app.get()).exists) await app.update({ status: 'live', updatedAt: F.now() });
+    }
     const owner = (await this.notifications.usersByPhone([w.ownerPhone])).get(w.ownerPhone);
     if (owner) {
       await this.notifications.notify([owner.id], {
@@ -627,7 +634,7 @@ export class AdminWeddingsService {
   /* ───────────── from an application ───────────── */
 
   async fromApplication(appId: string, adminId: string) {
-    const [app] = await this.db.select().from(hostApplications).where(eq(hostApplications.id, appId)).limit(1);
+    const app = await getDoc<Application>(col.applications().doc(appId));
     if (!app) throw notFound('Application');
     if (app.weddingId) return { weddingId: app.weddingId, import: null };
     const d: ApplicationData = app.data;
@@ -647,16 +654,14 @@ export class AdminWeddingsService {
       adminId,
       app.id,
     );
-    if (app.cardFile) {
-      await this.db.update(weddings).set({ card: { ...app.cardFile, pages: [] } }).where(eq(weddings.id, w.id));
-    }
+    if (app.cardFile) await col.weddings().doc(w.id).update({ card: { ...app.cardFile, pages: [] } });
     let imported = null;
     if (app.guestFile) {
       const buf = await this.storage.read(app.guestFile.key);
       const parsed = this.sheets.parse(await this.sheets.read(buf, app.guestFile.name));
       imported = await this.applyParsed(w, parsed, { mode: 'merge', dryRun: false, createFunctions: true }, adminId);
     }
-    await this.db.update(hostApplications).set({ weddingId: w.id, status: 'in_setup', assignedTo: app.assignedTo ?? adminId, updatedAt: new Date() }).where(eq(hostApplications.id, app.id));
+    await col.applications().doc(app.id).update({ weddingId: w.id, status: 'in_setup', assignedTo: app.assignedTo ?? adminId, updatedAt: F.now() });
     return { weddingId: w.id, import: imported };
   }
 }

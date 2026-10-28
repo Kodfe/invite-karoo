@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
-import { and, inArray, isNull } from 'drizzle-orm';
-import { DB, DbOrTx, InjectDb } from '../../db/db';
-import { NotifAction, notifications, UserPrefs, users } from '../../db/schema';
+import { col } from '../../db/paths';
+import { byIds, F, getRows, writeAll } from '../../db/store';
+import { NotifAction, User, UserPrefs } from '../../db/models';
 import { localParts } from '../../common/time';
 import { PushService } from './push.service';
 
@@ -25,42 +25,47 @@ function inQuietHours(p: UserPrefs, now: Date) {
 
 @Injectable()
 export class NotificationsService {
-  constructor(
-    @InjectDb() private readonly db: DB,
-    private readonly push: PushService,
-  ) {}
+  constructor(private readonly push: PushService) {}
 
-  /** map phone numbers to app accounts (an invite can exist long before the account) */
-  async usersByPhone(phones: string[], db: DbOrTx = this.db) {
-    if (!phones.length) return new Map<string, { id: string; prefs: UserPrefs }>();
-    const rows = await db
-      .select({ id: users.id, phone: users.phone, prefs: users.prefs })
-      .from(users)
-      .where(and(inArray(users.phone, [...new Set(phones)]), isNull(users.deletedAt)));
-    return new Map(rows.map((r) => [r.phone, { id: r.id, prefs: r.prefs }]));
+  /** map phone numbers to live app accounts (an invite can exist long before the account) */
+  async usersByPhone(phones: string[]) {
+    const out = new Map<string, { id: string; prefs: UserPrefs }>();
+    if (!phones.length) return out;
+    const links = [...(await byIds<{ uid: string }>(col.phones(), phones)).values()];
+    const users = await byIds<User>(col.users(), links.map((l) => l.uid));
+    for (const l of links) {
+      const u = users.get(l.uid);
+      if (u && !u.deletedAt) out.set(l.id, { id: u.id, prefs: u.prefs });
+    }
+    return out;
   }
 
   /**
    * Write the feed row for every user, then push to those whose preferences allow it.
    * Returns how many users got a feed row.
    */
-  async notify(userIds: string[], n: NewNotif, db: DbOrTx = this.db): Promise<number> {
+  async notify(userIds: string[], n: NewNotif): Promise<number> {
     const ids = [...new Set(userIds)];
     if (!ids.length) return 0;
-    await db.insert(notifications).values(
-      ids.map((userId) => ({
-        userId,
-        cat: n.cat,
-        title: n.title,
-        body: n.body,
-        long: n.long,
-        art: n.art,
-        action: n.action ?? { type: 'none' as const },
-      })),
+    await writeAll(
+      ids.map((userId) => (b) =>
+        b.set(col.notifications(userId).doc(), {
+          userId,
+          cat: n.cat,
+          title: n.title,
+          body: n.body,
+          long: n.long ?? null,
+          art: n.art ?? null,
+          action: n.action ?? { type: 'none' },
+          read: false,
+          pushed: false,
+          createdAt: F.now(),
+        }),
+      ),
     );
-    const prefs = await db.select({ id: users.id, prefs: users.prefs }).from(users).where(inArray(users.id, ids));
+    const users = await byIds<User>(col.users(), ids);
     const now = new Date();
-    const pushTo = prefs
+    const pushTo = [...users.values()]
       .filter(({ prefs: p }) => {
         if (!p.push || p.pause) return false;
         if (n.pref && p[n.pref] === false) return false;
@@ -74,5 +79,10 @@ export class NotificationsService {
       void this.push.toUsers(pushTo, { title: n.title, body: n.body, data }).catch(() => undefined);
     }
     return ids.length;
+  }
+
+  /** newest first */
+  async feed(userId: string, limit = 100) {
+    return getRows(col.notifications(userId).orderBy('createdAt', 'desc').limit(limit));
   }
 }
