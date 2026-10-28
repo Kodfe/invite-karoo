@@ -188,10 +188,11 @@ class _ChangeNumberScreenState extends State<ChangeNumberScreen> {
         setState(() => _sent = true);
       } else {
         final me = asJson(await s.api.post('/v1/me/phone/verify', {'cc': _cc, 'mobile': _mobile.text.trim(), 'code': _code.text.trim()}));
+        // the number is part of the sign-in: switch to the new one the server handed back
+        await s.reSignIn('${me['customToken']}');
+        me.remove('customToken');
         s.updateMe(me);
-        // every old session ended on the server; sign in again on the new number
         if (mounted) Navigator.of(context).pop(true);
-        await s.signOut();
       }
     } on ApiException catch (e) {
       setState(() => _err = e.message);

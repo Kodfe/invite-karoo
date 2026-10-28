@@ -93,7 +93,7 @@ jobs:
           done
           VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: *//; s/+.*//')
           DEFINES+=("--dart-define=APP_VERSION=$VERSION")
-          if [ -z "$API_URL" ]; then echo "::warning::Repository variable API_URL is not set — the app will try http://10.0.2.2:3000 (the Android emulator's localhost)."; fi
+          if [ -z "$FIREBASE_API_KEY" ] || [ -z "$FIREBASE_ANDROID_APP_ID" ]; then echo "::warning::Firebase variables (FIREBASE_API_KEY, FIREBASE_PROJECT_ID, FIREBASE_SENDER_ID, FIREBASE_ANDROID_APP_ID) are not set: this APK opens but cannot sign in."; fi
           set -o pipefail
           flutter build apk --release --target-platform android-arm,android-arm64 --build-number=${{ github.run_number }} "${DEFINES[@]}" 2>&1 | tee ../ci-build.txt
           if [ -f android/key.properties ]; then flutter build appbundle --release --build-number=${{ github.run_number }} "${DEFINES[@]}" 2>&1 | tee -a ../ci-build.txt; fi

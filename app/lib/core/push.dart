@@ -2,11 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 
 import 'api.dart';
-import 'config.dart';
+import 'fb.dart';
 import 'session.dart';
 
 /// Push notifications through Firebase Cloud Messaging.
@@ -25,18 +24,10 @@ class Push {
   static String get _platform => Platform.isIOS ? 'ios' : 'android';
 
   static Future<void> init() async {
-    if (!Config.pushConfigured || _ready) return;
+    if (_ready) return;
+    await Fb.init();
+    if (!Fb.ready) return;
     try {
-      await Firebase.initializeApp(
-        options: FirebaseOptions(
-          apiKey: Config.fbApiKey,
-          appId: Platform.isIOS ? Config.fbIosAppId : Config.fbAndroidAppId,
-          messagingSenderId: Config.fbSenderId,
-          projectId: Config.fbProjectId,
-          storageBucket: Config.fbStorageBucket.isEmpty ? null : Config.fbStorageBucket,
-          iosBundleId: Platform.isIOS ? 'com.invitekaroo.app' : null,
-        ),
-      );
       _ready = true;
       FirebaseMessaging.onMessage.listen(foreground.add);
       FirebaseMessaging.onMessageOpenedApp.listen((m) => taps.add(actionOf(m)));

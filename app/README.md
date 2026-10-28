@@ -26,8 +26,8 @@ Settings → Secrets and variables → Actions.
 
 | Name | Example |
 | --- | --- |
-| `API_URL` | `https://invite-karoo-api.up.railway.app` (the backend, no trailing slash) |
-| `FIREBASE_API_KEY`, `FIREBASE_PROJECT_ID`, `FIREBASE_SENDER_ID`, `FIREBASE_ANDROID_APP_ID`, `FIREBASE_IOS_APP_ID`, `FIREBASE_STORAGE_BUCKET` | From Firebase → Project settings → Your apps. Push stays off until these are set. |
+| `API_URL` | Optional. Defaults to `https://api.invitekaroo.com` |
+| `FIREBASE_API_KEY`, `FIREBASE_PROJECT_ID`, `FIREBASE_SENDER_ID`, `FIREBASE_ANDROID_APP_ID`, `FIREBASE_IOS_APP_ID`, `FIREBASE_STORAGE_BUCKET` | Firebase → Project settings → Your apps. **Required:** sign-in (Firebase Auth) and push both use them. |
 | `IOS_PUSH` | `true` once Push Notifications is enabled on the App ID |
 | `IOS_ON_PUSH` | `true` to send every push to `main` to TestFlight (otherwise run it by hand) |
 | `PRIVACY_URL`, `TERMS_URL` | Your published policy pages |
@@ -60,7 +60,9 @@ Losing this file means you can never update the app on the Play Store. Keep two 
 flutter create --org com.invitekaroo --project-name invite_karoo --platforms android,ios .
 rm -rf test && python3 tool/prepare_platforms.py
 ALLOW_CLEARTEXT=1 python3 tool/prepare_platforms.py   # only to talk to a local http backend
-flutter run --dart-define=API_URL=http://10.0.2.2:3000
+flutter run --dart-define=FIREBASE_API_KEY=… --dart-define=FIREBASE_PROJECT_ID=… --dart-define=FIREBASE_SENDER_ID=… --dart-define=FIREBASE_ANDROID_APP_ID=…
 ```
 
-Demo sign-ins with the backend's demo data (OTP `1234`): `98644 55120` (host + guest), `91234 56780` (guest only).
+Sign-in: the WhatsApp code is checked by the API, which hands back a Firebase custom token; the app signs in to
+Firebase Auth with it and sends the Firebase ID token on every request. With `DEV_OTP=1234` on a test project,
+the demo numbers (`npm run seed:demo`) are `98644 55120` (host + guest) and `91234 56780` (guest only).

@@ -27,23 +27,19 @@ class ApiException implements Exception {
   String toString() => message;
 }
 
-/// Where the tokens live (secure storage), kept in memory for fast access.
-abstract class TokenStore {
-  String? get access;
-  String? get refresh;
-  Future<void> save(String access, String refresh);
-  Future<void> clear();
+/// Where the bearer token comes from (the signed-in user's Firebase ID token).
+abstract class TokenSource {
+  Future<String?> idToken({bool refresh = false});
 }
 
-/// One HTTP client for the whole app. Adds the bearer token, refreshes it once on a 401,
+/// One HTTP client for the whole app. Adds the bearer token, gets a fresh one once on a 401,
 /// and turns every failure into an [ApiException] with a message fit to show a person.
 class Api {
   Api({required this.tokens, required this.onSignedOut});
 
-  final TokenStore tokens;
+  final TokenSource tokens;
   final void Function() onSignedOut;
   final http.Client _client = http.Client();
-  Future<bool>? _refreshing;
 
   Uri uri(String path, [Map<String, dynamic>? query]) {
     final q = <String, String>{};
@@ -62,7 +58,7 @@ class Api {
   Future<dynamic> _send(String method, String path, {Map<String, dynamic>? query, Object? body, bool retried = false}) async {
     final req = http.Request(method, uri(path, query));
     req.headers['Accept'] = 'application/json';
-    final t = tokens.access;
+    final t = await tokens.idToken(refresh: retried);
     if (t != null) req.headers['Authorization'] = 'Bearer $t';
     if (body != null) {
       req.headers['Content-Type'] = 'application/json';
@@ -78,8 +74,9 @@ class Api {
     } on http.ClientException {
       throw ApiException('NETWORK', 'Could not reach Invite Karoo. Please try again.');
     }
-    if (res.statusCode == 401 && !retried && tokens.refresh != null && !path.startsWith('/v1/auth/')) {
-      if (await _refresh()) return _send(method, path, query: query, body: body, retried: true);
+    if (res.statusCode == 401 && t != null && !path.startsWith('/v1/auth/')) {
+      if (!retried) return _send(method, path, query: query, body: body, retried: true);
+      onSignedOut();
     }
     return _decode(res);
   }
@@ -88,7 +85,7 @@ class Api {
   Future<dynamic> upload(String path,
       {Map<String, String> files = const {}, Map<String, String> fields = const {}, Map<String, dynamic>? query, bool retried = false}) async {
     final req = http.MultipartRequest('POST', uri(path, query));
-    final t = tokens.access;
+    final t = await tokens.idToken(refresh: retried);
     if (t != null) req.headers['Authorization'] = 'Bearer $t';
     req.fields.addAll(fields);
     for (final e in files.entries) {
@@ -102,17 +99,22 @@ class Api {
     } on SocketException {
       throw ApiException('NETWORK', 'No internet connection. Check your network and try again.');
     }
-    if (res.statusCode == 401 && !retried && tokens.refresh != null) {
-      if (await _refresh()) return upload(path, files: files, fields: fields, query: query, retried: true);
+    if (res.statusCode == 401 && t != null) {
+      if (!retried) return upload(path, files: files, fields: fields, query: query, retried: true);
+      onSignedOut();
     }
     return _decode(res);
   }
 
   /// raw bytes (card PDF, spreadsheet template)
   Future<List<int>> bytes(String path) async {
-    Future<http.Response> go() => _client.get(uri(path), headers: {if (tokens.access != null) 'Authorization': 'Bearer ${tokens.access}'});
-    var res = await go();
-    if (res.statusCode == 401 && await _refresh()) res = await go();
+    Future<http.Response> go(bool fresh) async {
+      final t = await tokens.idToken(refresh: fresh);
+      return _client.get(uri(path), headers: {if (t != null) 'Authorization': 'Bearer $t'});
+    }
+
+    var res = await go(false);
+    if (res.statusCode == 401) res = await go(true);
     if (res.statusCode >= 400) _decode(res);
     return res.bodyBytes;
   }
@@ -136,32 +138,6 @@ class Api {
       status: res.statusCode,
       fields: fields,
     );
-  }
-
-  Future<bool> _refresh() {
-    return _refreshing ??= () async {
-      try {
-        final r = tokens.refresh;
-        if (r == null) return false;
-        final res = await _client
-            .post(uri('/v1/auth/refresh'), headers: {'Content-Type': 'application/json'}, body: jsonEncode({'refreshToken': r}))
-            .timeout(const Duration(seconds: 20));
-        if (res.statusCode != 200) {
-          if (res.statusCode == 401) {
-            await tokens.clear();
-            onSignedOut();
-          }
-          return false;
-        }
-        final j = jsonDecode(res.body) as Map;
-        await tokens.save('${j['accessToken']}', '${j['refreshToken']}');
-        return true;
-      } catch (_) {
-        return false;
-      } finally {
-        _refreshing = null;
-      }
-    }();
   }
 
   static MediaType? _mime(String path) {

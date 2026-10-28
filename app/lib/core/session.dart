@@ -1,49 +1,10 @@
 import 'dart:convert';
 
 import 'package:flutter/widgets.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'api.dart';
-
-class SecureTokens implements TokenStore {
-  static const _s = FlutterSecureStorage();
-  String? _access;
-  String? _refresh;
-
-  @override
-  String? get access => _access;
-  @override
-  String? get refresh => _refresh;
-
-  Future<void> load() async {
-    try {
-      _access = await _s.read(key: 'ik_access');
-      _refresh = await _s.read(key: 'ik_refresh');
-    } catch (_) {
-      // a reinstalled iOS app can carry an unreadable keychain entry: start clean
-      await clear();
-    }
-  }
-
-  @override
-  Future<void> save(String access, String refresh) async {
-    _access = access;
-    _refresh = refresh;
-    await _s.write(key: 'ik_access', value: access);
-    await _s.write(key: 'ik_refresh', value: refresh);
-  }
-
-  @override
-  Future<void> clear() async {
-    _access = null;
-    _refresh = null;
-    try {
-      await _s.delete(key: 'ik_access');
-      await _s.delete(key: 'ik_refresh');
-    } catch (_) {}
-  }
-}
+import 'fb.dart';
 
 /// The signed-in person, which side of the app they are on, and their language.
 class Session extends ChangeNotifier {
@@ -51,7 +12,7 @@ class Session extends ChangeNotifier {
     api = Api(tokens: tokens, onSignedOut: _forceSignOut);
   }
 
-  final SecureTokens tokens = SecureTokens();
+  final FirebaseTokens tokens = FirebaseTokens();
   late final Api api;
   SharedPreferences? _prefs;
 
@@ -70,7 +31,7 @@ class Session extends ChangeNotifier {
   /// bumps whenever something changed that open lists should reload for
   int dataVersion = 0;
 
-  bool get signedIn => tokens.access != null && me != null;
+  bool get signedIn => tokens.signedIn && me != null;
 
   List<Json> get hosting => asList(asJson(me?['host'])['weddings']);
   String get hostAccess => '${asJson(me?['host'])['access'] ?? 'none'}';
@@ -103,8 +64,8 @@ class Session extends ChangeNotifier {
         me = asJson(jsonDecode(cached));
       } catch (_) {}
     }
-    await tokens.load();
-    if (tokens.access == null) {
+    // Firebase Auth keeps the sign-in on the device
+    if (!tokens.signedIn) {
       me = null;
     } else {
       try {
@@ -139,8 +100,7 @@ class Session extends ChangeNotifier {
 
   /// the body of /auth/otp/verify or /auth/signup when status == signed_in
   Future<void> applySignIn(Json r) async {
-    final t = asJson(r['tokens']);
-    await tokens.save('${t['accessToken']}', '${t['refreshToken']}');
+    await tokens.signInWithCustomToken('${r['customToken']}');
     _setMe(asJson(r['me']));
     // a fresh sign-in always starts on the guest side
     mode = 'guest';
@@ -152,6 +112,11 @@ class Session extends ChangeNotifier {
     final m = await api.get('/v1/me');
     _setMe(asJson(m));
     if (notify) notifyListeners();
+  }
+
+  /// after a number change the server hands back a new sign-in for the new number
+  Future<void> reSignIn(String customToken) async {
+    await tokens.signInWithCustomToken(customToken);
   }
 
   void updateMe(Json m) {
@@ -187,12 +152,6 @@ class Session extends ChangeNotifier {
   }
 
   Future<void> signOut() async {
-    final r = tokens.refresh;
-    if (r != null) {
-      try {
-        await api.post('/v1/auth/logout', {'refreshToken': r});
-      } catch (_) {}
-    }
     await _clearLocal();
     notifyListeners();
   }
@@ -204,7 +163,9 @@ class Session extends ChangeNotifier {
   }
 
   Future<void> _clearLocal() async {
-    await tokens.clear();
+    try {
+      await tokens.signOut();
+    } catch (_) {}
     me = null;
     mode = 'guest';
     hostWeddingId = null;
