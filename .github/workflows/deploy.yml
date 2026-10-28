@@ -20,6 +20,8 @@ concurrency:
 
 jobs:
   deploy:
+    # skipped until the Firebase project is connected (variable FIREBASE_PROJECT_ID)
+    if: vars.FIREBASE_PROJECT_ID != ''
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
