@@ -109,15 +109,24 @@ jobs:
           retention-days: 30
 
       - name: Put the APK on the Releases page
+        if: github.ref == 'refs/heads/main'
         working-directory: .
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          APK=$(ls app/build/invite-karoo-*.apk)
-          gh release delete android-latest --yes --cleanup-tag 2>/dev/null || true
-          gh release create android-latest "$APK" --prerelease --target "${{ github.sha }}" \
-            --title "Android test build ${{ github.run_number }}" \
-            --notes "Latest Android test build (run ${{ github.run_number }}). Open this page on the phone, tap the .apk file, and allow installing from this source when Android asks."
+          set -o pipefail
+          {
+            APK=$(ls app/build/invite-karoo-*.apk)
+            # one release, updated in place: same link every time
+            if ! gh release view android-latest > /dev/null 2>&1; then
+              gh release create android-latest --prerelease --title "Android test build" \
+                --notes "Latest Android test build. Open this page on the phone, tap the .apk file, and allow installing from this source when Android asks."
+            fi
+            for a in $(gh release view android-latest --json assets -q '.assets[].name'); do gh release delete-asset android-latest "$a" -y; done
+            gh release upload android-latest "$APK" --clobber
+            gh release edit android-latest --title "Android test build ${{ github.run_number }}" --target "${{ github.sha }}"
+            echo "Published $APK"
+          } 2>&1 | tee ci-release.txt
 
       - name: Save the logs for review
         if: always()
