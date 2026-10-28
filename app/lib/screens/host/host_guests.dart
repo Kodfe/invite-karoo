@@ -258,7 +258,7 @@ class HostGuestScreen extends StatelessWidget {
                     title: '${f['name']}',
                     sub: '${f['dayLabel']} · ${f['timeLabel']}',
                     trailing: IkButton(tr(context, 'Add'), compact: true, kind: BtnKind.ghost, icon: Icons.add_rounded, onPressed: () async {
-                      final r = await guard(context, () => s.api.put('$base/guests/$guestId/functions/${f['functionId']}', {'invited': true}));
+                      final r = await guard<dynamic>(context, () => s.api.put('$base/guests/$guestId/functions/${f['functionId']}', {'invited': true}));
                       if (r != null) {
                         s.touch();
                         await reload();
@@ -385,8 +385,8 @@ class _InviteCard extends StatelessWidget {
               onSelected: (v) async {
                 final base = hostBase(weddingId);
                 Object? r;
-                if (v == 'gift') r = await guard(context, () => s.api.put('$base/guests/${g['id']}/functions/${f['functionId']}', {'invited': true, 'giftOut': !(i['giftOut'] == true)}));
-                if (v == 'remove') r = await guard(context, () => s.api.put('$base/guests/${g['id']}/functions/${f['functionId']}', {'invited': false}));
+                if (v == 'gift') r = await guard<dynamic>(context, () => s.api.put('$base/guests/${g['id']}/functions/${f['functionId']}', {'invited': true, 'giftOut': !(i['giftOut'] == true)}));
+                if (v == 'remove') r = await guard<dynamic>(context, () => s.api.put('$base/guests/${g['id']}/functions/${f['functionId']}', {'invited': false}));
                 if (r != null) {
                   s.touch();
                   await reload();

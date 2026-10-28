@@ -489,7 +489,7 @@ class AgendaCard extends StatelessWidget {
       child: Opacity(
         opacity: st == 'done' ? .6 : 1,
         child: Row(children: [
-          Thumb(item.image, contain: item.imageContain),
+          PicThumb(item.image, contain: item.imageContain),
           const SizedBox(width: 12),
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [

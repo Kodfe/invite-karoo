@@ -38,8 +38,8 @@ class Pic extends StatelessWidget {
 }
 
 /// rounded picture tile used on agenda and list rows
-class Thumb extends StatelessWidget {
-  const Thumb(this.src, {super.key, this.size = 58, this.radius = 16, this.contain = false, this.bg});
+class PicThumb extends StatelessWidget {
+  const PicThumb(this.src, {super.key, this.size = 58, this.radius = 16, this.contain = false, this.bg});
   final String src;
   final double size;
   final double radius;

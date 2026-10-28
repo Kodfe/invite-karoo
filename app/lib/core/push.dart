@@ -47,7 +47,7 @@ class Push {
     }
   }
 
-  /// the server sends { cat, action: '<json>' } as data
+  /// The server sends `{ cat, action: '<json>' }` as data.
   static Json actionOf(RemoteMessage m) {
     final a = m.data['action'];
     if (a is String && a.isNotEmpty) {
