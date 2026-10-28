@@ -497,7 +497,8 @@ describe('changes, reminders and the rest', () => {
     expect(me2.body.phone).toBe('+919810000444');
     await http.delete('/v1/me').set(bearer(stranger.token)).send({}).expect(422);
     await http.delete('/v1/me').set(bearer(stranger.token)).send({ confirm: 'DELETE' }).expect(200);
-    await http.get('/v1/me').set(bearer(stranger.token)).expect(404);
+    // the Firebase account is gone too: the old sign-in stops working
+    await http.get('/v1/me').set(bearer(stranger.token)).expect(401);
   });
 
   it('exports the list back out', async () => {

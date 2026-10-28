@@ -94,7 +94,8 @@ export class FakeAuth implements AuthPort {
     if (!token.startsWith('fakeid.')) throw new Error('bad token');
     const c = this.dec(token.split('.')[1]) as IdClaims & { iat: number };
     const u = this.users.get(c.uid);
-    if (u?.disabled || (u?.revokedAt && c.iat < u.revokedAt)) throw new Error('revoked');
+    // like Firebase: a deleted or disabled account's tokens stop working
+    if (!u || u.disabled || (u.revokedAt && c.iat < u.revokedAt)) throw new Error('revoked');
     return c;
   }
   async createUser(u: AuthUserIn) {
