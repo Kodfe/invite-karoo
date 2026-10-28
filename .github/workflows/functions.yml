@@ -2,6 +2,9 @@ name: API
 
 # The API (Cloud Functions) tests, twice: against the in-memory store, and against the real
 # Firestore + Auth emulators.
+permissions:
+  contents: write   # only to save the test log on the ci-logs-api branch
+
 on:
   push:
     paths: ['functions/**', 'firebase.json', 'firestore.*', '.github/workflows/functions.yml']
@@ -35,4 +38,16 @@ jobs:
         run: npm test
       - name: Tests (Firebase emulators)
         working-directory: .
-        run: npx --yes firebase-tools@latest emulators:exec --only firestore,auth --project demo-invitekaroo "npm --prefix functions test"
+        run: |
+          set -o pipefail
+          npx --yes firebase-tools@latest emulators:exec --only firestore,auth --project demo-invitekaroo "npm --prefix functions test" 2>&1 | tee ci-emulator-tests.txt
+
+      - name: Save the log for review
+        if: always()
+        working-directory: .
+        run: |
+          mkdir -p "$RUNNER_TEMP/logs" && cp ci-*.txt "$RUNNER_TEMP/logs/" 2>/dev/null || true
+          echo "run ${{ github.run_number }} · ${{ github.sha }} · ${{ job.status }}" > "$RUNNER_TEMP/logs/STATUS.txt"
+          cd "$RUNNER_TEMP/logs" && git init -q -b logs && git config user.name ci && git config user.email ci@invitekaroo.local
+          git add -A && git commit -qm "Test log, run ${{ github.run_number }}"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" logs:ci-logs-api
