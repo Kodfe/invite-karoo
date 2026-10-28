@@ -1,5 +1,6 @@
+'use client';
 import { FormEvent, useEffect, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useQueryParam } from '../nav';
 import { api } from '../api';
 import { ago, Btn, Empty, ErrorNote, fmtWhen, Loading, PageHead, Pager, Pill, Tabs, useAction, useLoad } from '../ui';
 
@@ -77,8 +78,8 @@ export function TicketsPage() {
 }
 
 export function TicketPage() {
-  const { id } = useParams();
-  const t = useLoad(() => api.get(`/tickets/${id}`), [id]);
+  const id = useQueryParam('id');
+  const t = useLoad(() => (id ? api.get(`/tickets/${id}`) : new Promise<never>(() => {})), [id]);
   const [body, setBody] = useState('');
   const act = useAction();
   const end = useRef<HTMLDivElement>(null);
@@ -101,6 +102,7 @@ export function TicketPage() {
     if (r) t.reload();
   };
 
+  if (!id) return <Empty title="No ticket chosen"><Link to="/tickets">Open support →</Link></Empty>;
   if (t.error) return <ErrorNote>{t.error}</ErrorNote>;
   if (!t.data) return <Loading />;
   const d = t.data;

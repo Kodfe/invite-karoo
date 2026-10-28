@@ -1,39 +1,98 @@
-import { createContext, ReactNode, useCallback, useContext, useEffect, useState } from 'react';
-import { api, Role, setUnauthorizedHandler, token } from './api';
+'use client';
+import { createContext, ReactNode, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { api, ApiError, Role, setUnauthorizedHandler } from '../api';
+import { backend } from './select';
+import { AuthError } from './types';
 
 export type Admin = { id: string; email: string; name: string; role: Role };
-type Auth = { admin: Admin | null; ready: boolean; login: (email: string, password: string) => Promise<void>; logout: () => void };
 
-const Ctx = createContext<Auth>({ admin: null, ready: false, login: async () => {}, logout: () => {} });
+type State =
+  | { phase: 'starting' }
+  | { phase: 'signedOut'; notice: string | null }
+  | { phase: 'signedIn'; admin: Admin }
+  /** signed in to Firebase but the API could not be reached */
+  | { phase: 'stuck'; message: string };
+
+type Auth = {
+  state: State;
+  admin: Admin | null;
+  login: (email: string, password: string) => Promise<void>;
+  logout: () => Promise<void>;
+  retry: () => Promise<void>;
+};
+
+const NOT_TEAM = 'This account is not on the Invite Karoo team';
+
+const Ctx = createContext<Auth>({
+  state: { phase: 'starting' },
+  admin: null,
+  login: async () => {},
+  logout: async () => {},
+  retry: async () => {},
+});
 export const useAuth = () => useContext(Ctx);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [admin, setAdmin] = useState<Admin | null>(null);
-  const [ready, setReady] = useState(false);
+  const [state, setState] = useState<State>({ phase: 'starting' });
+  /** set while login() runs, so the auth listener doesn't check the account twice */
+  const signingIn = useRef(false);
 
-  const logout = useCallback(() => {
-    token.set(null);
-    setAdmin(null);
+  /** asks the API who this Firebase user is on the team; throws for the login form */
+  const checkTeam = useCallback(async (): Promise<void> => {
+    try {
+      const admin = await api.get<Admin>('/me');
+      setState({ phase: 'signedIn', admin });
+    } catch (e) {
+      if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
+        await backend.signOut().catch(() => {});
+        const notice = e.code === 'NOT_TEAM' || e.status === 403 || e.status === 401 ? NOT_TEAM : e.message;
+        setState({ phase: 'signedOut', notice });
+        throw new AuthError(e.code, notice);
+      }
+      const message = e instanceof Error ? e.message : 'Could not reach the server';
+      setState({ phase: 'stuck', message });
+      throw e;
+    }
+  }, []);
+
+  const logout = useCallback(async () => {
+    await backend.signOut().catch(() => {});
+    setState({ phase: 'signedOut', notice: null });
   }, []);
 
   useEffect(() => {
-    setUnauthorizedHandler(logout);
-    if (!token.get()) {
-      setReady(true);
-      return;
-    }
-    api
-      .get<Admin>('/me')
-      .then(setAdmin)
-      .catch(() => token.set(null))
-      .finally(() => setReady(true));
-  }, [logout]);
+    setUnauthorizedHandler(() => {
+      void backend.signOut().catch(() => {});
+      setState({ phase: 'signedOut', notice: 'Your sign-in ended. Please sign in again.' });
+    });
+    return backend.onChange((user) => {
+      if (signingIn.current) return;
+      if (!user) {
+        setState((s) => (s.phase === 'signedOut' ? s : { phase: 'signedOut', notice: null }));
+        return;
+      }
+      checkTeam().catch(() => {});
+    });
+  }, [checkTeam]);
 
-  const login = useCallback(async (email: string, password: string) => {
-    const r = await api.post<{ token: string; admin: Admin }>('/auth/login', { email, password });
-    token.set(r.token);
-    setAdmin(r.admin);
-  }, []);
+  const login = useCallback(
+    async (email: string, password: string) => {
+      signingIn.current = true;
+      try {
+        await backend.signIn(email, password);
+        await checkTeam();
+      } finally {
+        signingIn.current = false;
+      }
+    },
+    [checkTeam],
+  );
 
-  return <Ctx.Provider value={{ admin, ready, login, logout }}>{children}</Ctx.Provider>;
+  const retry = useCallback(async () => {
+    setState({ phase: 'starting' });
+    await checkTeam().catch(() => {});
+  }, [checkTeam]);
+
+  const admin = state.phase === 'signedIn' ? state.admin : null;
+  return <Ctx.Provider value={{ state, admin, login, logout, retry }}>{children}</Ctx.Provider>;
 }

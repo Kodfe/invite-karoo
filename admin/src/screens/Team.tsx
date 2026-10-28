@@ -1,3 +1,4 @@
+'use client';
 import { FormEvent, useState } from 'react';
 import { api, can, Role } from '../api';
 import { useAuth } from '../auth';

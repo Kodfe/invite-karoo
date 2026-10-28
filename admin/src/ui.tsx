@@ -1,3 +1,4 @@
+'use client';
 import { createContext, ReactNode, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { ApiError } from './api';
 

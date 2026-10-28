@@ -1,6 +1,7 @@
+'use client';
 import { FormEvent, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
-import { api, can } from '../api';
+import { Link, useNavigate, useQueryParam } from '../nav';
+import { api, can, fileUrl } from '../api';
 import { useAuth } from '../auth';
 import { Btn, clock, Empty, ErrorNote, Field, fmtDay, fmtRange, fmtSize, fmtWhen, Loading, Modal, Note, PageHead, Pager, Pill, Tabs, useAction, useConfirm, useDebounced, useLoad, useToast } from '../ui';
 import { WeddingForm, weddingPayload, weddingValues } from './WeddingForm';
@@ -9,14 +10,16 @@ type Tab = 'details' | 'functions' | 'guests' | 'media' | 'access';
 type W = Record<string, any>;
 
 export function WeddingPage() {
-  const { id = '', tab = 'details' } = useParams();
+  const id = useQueryParam('id');
+  const tab = (useQueryParam('tab') || 'details') as Tab;
   const nav = useNavigate();
   const { admin } = useAuth();
-  const w = useLoad(() => api.get<W>(`/weddings/${id}`), [id]);
+  const w = useLoad(() => (id ? api.get<W>(`/weddings/${id}`) : new Promise<never>(() => {})), [id]);
   const confirm = useConfirm();
   const act = useAction();
   const editable = can(admin?.role, 'setup');
 
+  if (!id) return <Empty title="No wedding chosen"><Link to="/weddings">Open the list of weddings →</Link></Empty>;
   if (w.error) return <ErrorNote>{w.error}</ErrorNote>;
   if (!w.data) return <Loading />;
   const d = w.data;
@@ -966,7 +969,7 @@ function MediaTab({ w, editable, setW, reload }: { w: W; editable: boolean; setW
               <div className="thumbs">
                 {items.map((m: any, i: number) => (
                   <figure key={m.id} className="thumb">
-                    {m.type === 'video' ? <video src={m.url} muted playsInline preload="metadata" /> : <img src={m.url} alt="" loading="lazy" />}
+                    {m.type === 'video' ? <video src={fileUrl(m.url)} muted playsInline preload="metadata" /> : <img src={fileUrl(m.url)} alt="" loading="lazy" />}
                     {m.type === 'video' ? <span className="thumb-tag">Video</span> : null}
                     {editable ? (
                       <figcaption>
@@ -1031,7 +1034,7 @@ function CardSection({ w, editable, setW }: { w: W; editable: boolean; setW: (w:
             <div className="thumbs small">
               {w.card.pages.map((u: string) => (
                 <figure key={u} className="thumb">
-                  <img src={u} alt="" loading="lazy" />
+                  <img src={fileUrl(u)} alt="" loading="lazy" />
                 </figure>
               ))}
             </div>
@@ -1076,7 +1079,7 @@ function VoiceSection({ w, editable, setW }: { w: W; editable: boolean; setW: (w
       <p className="muted small">A short recorded invitation from the family, played on the wedding page.</p>
       {w.voice ? (
         <>
-          <audio controls src={w.voice.url} preload="none" className="audio" />
+          <audio controls src={fileUrl(w.voice.url)} preload="none" className="audio" />
           {w.voice.durationSec ? <div className="muted small">{Math.floor(w.voice.durationSec / 60)}:{String(w.voice.durationSec % 60).padStart(2, '0')}</div> : null}
         </>
       ) : (
@@ -1137,7 +1140,7 @@ function PeopleSection({ w, editable, setW }: { w: W; editable: boolean; setW: (
           const url = w[p.id]?.photoUrl;
           return (
             <div key={p.id} className="person">
-              <div className="portrait">{url ? <img src={url} alt="" /> : <span>{(w[p.id]?.name ?? '?').slice(0, 1)}</span>}</div>
+              <div className="portrait">{url ? <img src={fileUrl(url)} alt="" /> : <span>{(w[p.id]?.name ?? '?').slice(0, 1)}</span>}</div>
               <div className="person-name">{w[p.id]?.name}</div>
               <div className="muted small">{p.label}</div>
               {editable ? (

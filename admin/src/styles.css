@@ -352,6 +352,7 @@ label.btn { position: relative; }
 .login-card h1 { text-align: center; }
 .login-sub, .login-foot { text-align: center; color: var(--ink3); margin: -6px 0 6px; font-size: 13px; }
 .login-foot { margin: 0; font-size: 12px; }
+.login-forgot { align-self: center; font-size: 13px; }
 
 /* ───────── narrow screens ───────── */
 @media (max-width: 1000px) {

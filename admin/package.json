@@ -1,0 +1,23 @@
+{
+  "name": "invite-karoo-admin",
+  "private": true,
+  "version": "2.0.0",
+  "scripts": {
+    "dev": "next dev -p 5173",
+    "build": "next build",
+    "typecheck": "tsc --noEmit",
+    "start": "npx --yes serve@14 out -l 5173"
+  },
+  "dependencies": {
+    "firebase": "^12.0.0",
+    "next": "^15.5.28",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "typescript": "^5.9.3"
+  }
+}

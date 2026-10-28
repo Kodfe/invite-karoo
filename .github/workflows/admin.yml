@@ -1,5 +1,6 @@
 name: Admin
 
+# Builds the Next.js Admin Dashboard (static export → admin/out) on every change.
 on:
   push:
     paths: ['admin/**', '.github/workflows/admin.yml']
@@ -14,6 +15,15 @@ jobs:
     defaults:
       run:
         working-directory: admin
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+      # placeholders: the build only checks that the site compiles; real values come from the deploy
+      NEXT_PUBLIC_API_URL: https://api.invitekaroo.com
+      NEXT_PUBLIC_FIREBASE_API_KEY: ci-placeholder
+      NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: ci-placeholder.firebaseapp.com
+      NEXT_PUBLIC_FIREBASE_PROJECT_ID: ci-placeholder
+      NEXT_PUBLIC_FIREBASE_APP_ID: ci-placeholder
+      NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: ci-placeholder.firebasestorage.app
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -22,4 +32,12 @@ jobs:
           cache: npm
           cache-dependency-path: admin/package-lock.json
       - run: npm ci
+      - run: npm run typecheck
       - run: npm run build
+      - name: Check the static export
+        run: |
+          test -f out/index.html || { echo "::error::missing out/index.html"; exit 1; }
+          for p in account applications applications/view lookup support support/view team users weddings weddings/view; do
+            test -f "out/$p/index.html" || { echo "::error::missing out/$p/index.html"; exit 1; }
+          done
+          if grep -rq "ik_mock_user" out; then echo "::error::the mock sign-in leaked into the build"; exit 1; fi

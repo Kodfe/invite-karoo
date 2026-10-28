@@ -1,7 +1,8 @@
-// Talks to the Invite Karoo API. Same origin by default (the API serves this page at /admin);
-// set VITE_API_URL to point a local dev build at another server.
-const BASE = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, '') ?? '';
-const TOKEN_KEY = 'ik_admin_token';
+// Talks to the Invite Karoo API (https://api.invitekaroo.com by default) with the signed-in
+// team member's Firebase ID token. NEXT_PUBLIC_API_URL points a build at another server.
+import { backend } from './auth/select';
+
+export const API_BASE = (process.env.NEXT_PUBLIC_API_URL || 'https://api.invitekaroo.com').replace(/\/$/, '');
 
 export type Json = Record<string, any>;
 export type Role = 'admin' | 'setup' | 'support';
@@ -12,35 +13,18 @@ export class ApiError extends Error {
   }
 }
 
-export const token = {
-  get(): string | null {
-    try {
-      return localStorage.getItem(TOKEN_KEY);
-    } catch {
-      return memo;
-    }
-  },
-  set(v: string | null) {
-    memo = v;
-    try {
-      if (v) localStorage.setItem(TOKEN_KEY, v);
-      else localStorage.removeItem(TOKEN_KEY);
-    } catch {
-      /* private window: keep it in memory */
-    }
-  },
-};
-let memo: string | null = null;
-
-/** called when the server says the session is over */
+/** called when the API still says 401 after a fresh token: the sign-in is over */
 let onUnauthorized: () => void = () => {};
 export const setUnauthorizedHandler = (fn: () => void) => (onUnauthorized = fn);
 
-async function raw(method: string, path: string, body?: unknown, query?: Json): Promise<Response> {
-  const url = new URL(BASE + '/v1/admin' + path, window.location.origin);
+/** media and file links come back absolute; a relative one is resolved against the API */
+export const fileUrl = (u: string | null | undefined) => (!u ? '' : /^(https?:|blob:|data:)/.test(u) ? u : API_BASE + (u.startsWith('/') ? u : '/' + u));
+
+async function raw(method: string, path: string, body?: unknown, query?: Json, fresh = false): Promise<Response> {
+  const url = new URL(API_BASE + '/v1/admin' + path);
   if (query) for (const [k, v] of Object.entries(query)) if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
   const headers: Record<string, string> = {};
-  const t = token.get();
+  const t = await backend.idToken(fresh);
   if (t) headers.Authorization = `Bearer ${t}`;
   let payload: BodyInit | undefined;
   if (body instanceof FormData) payload = body;
@@ -50,10 +34,12 @@ async function raw(method: string, path: string, body?: unknown, query?: Json): 
   }
   let res: Response;
   try {
-    res = await fetch(url.toString(), { method, headers, body: payload });
+    res = await fetch(url.toString(), { method, headers, body: payload, credentials: 'omit' });
   } catch {
     throw new ApiError('NETWORK', 'Could not reach the server. Check your connection and try again.', 0);
   }
+  // the cached token may have just expired: try once more with a fresh one
+  if (res.status === 401 && !fresh && t) return raw(method, path, body, query, true);
   if (!res.ok) {
     let err: Json = {};
     try {
@@ -61,7 +47,7 @@ async function raw(method: string, path: string, body?: unknown, query?: Json): 
     } catch {
       /* not JSON */
     }
-    if (res.status === 401 && path !== '/auth/login') onUnauthorized();
+    if (res.status === 401 && path !== '/me') onUnauthorized();
     throw new ApiError(err.code ?? 'HTTP_' + res.status, err.message ?? `Request failed (${res.status})`, res.status, err.fields);
   }
   return res;

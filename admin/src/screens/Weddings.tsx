@@ -1,5 +1,6 @@
+'use client';
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from '../nav';
 import { api, can } from '../api';
 import { useAuth } from '../auth';
 import { Btn, Empty, ErrorNote, fmtRange, Loading, Modal, PageHead, Pager, Pill, Tabs, useAction, useDebounced, useLoad } from '../ui';

@@ -1,5 +1,6 @@
+'use client';
 import { useEffect, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useQueryParam } from '../nav';
 import { api, can } from '../api';
 import { useAuth } from '../auth';
 import { ago, Btn, Empty, ErrorNote, Field, fmtDay, fmtRange, fmtSize, fmtWhen, Loading, Note, PageHead, Pager, Pill, Tabs, useAction, useConfirm, useLoad } from '../ui';
@@ -84,11 +85,11 @@ export function ApplicationsPage() {
 }
 
 export function ApplicationPage() {
-  const { id } = useParams();
+  const id = useQueryParam('id');
   const { admin } = useAuth();
   const nav = useNavigate();
   const confirm = useConfirm();
-  const app = useLoad(() => api.get(`/applications/${id}`), [id]);
+  const app = useLoad(() => (id ? api.get(`/applications/${id}`) : new Promise<never>(() => {})), [id]);
   const team = useLoad(() => (can(admin?.role, 'admin') ? api.get<any[]>('/team') : Promise.resolve([] as any[])), [admin?.role]);
   const [notes, setNotes] = useState('');
   const [created, setCreated] = useState<any>(null);
@@ -98,6 +99,7 @@ export function ApplicationPage() {
     setNotes(app.data?.adminNotes ?? '');
   }, [app.data?.adminNotes]);
 
+  if (!id) return <Empty title="No application chosen"><Link to="/applications">Open host applications →</Link></Empty>;
   if (app.error) return <ErrorNote>{app.error}</ErrorNote>;
   if (!app.data) return <Loading />;
   const a = app.data;

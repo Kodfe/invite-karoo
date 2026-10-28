@@ -1,5 +1,6 @@
+'use client';
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from '../nav';
 import { api } from '../api';
 import { Empty, ErrorNote, fmtDay, Loading, PageHead, Pager, useDebounced, useLoad } from '../ui';
 

@@ -1,12 +1,13 @@
+'use client';
 import { FormEvent, useEffect, useState } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useQueryParam } from '../nav';
 import { api } from '../api';
 import { Btn, Empty, ErrorNote, Field, PageHead, Pill, useAction } from '../ui';
 
 type Hit = { guestId: string; name: string; active: boolean; weddingId: string; wedding: string; invites: number };
 
 export function LookupPage() {
-  const start = (useLocation().state as { phone?: string } | null)?.phone ?? '';
+  const start = useQueryParam('phone');
   const [phone, setPhone] = useState(start);
   const [hits, setHits] = useState<Hit[] | null>(null);
   const act = useAction();

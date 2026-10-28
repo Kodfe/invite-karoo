@@ -1,4 +1,5 @@
-import { Link } from 'react-router-dom';
+'use client';
+import { Link } from '../nav';
 import { api } from '../api';
 import { useAuth } from '../auth';
 import { ago, Empty, ErrorNote, fmtRange, Loading, PageHead, Pill, useLoad } from '../ui';
