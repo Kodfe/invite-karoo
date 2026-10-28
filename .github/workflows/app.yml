@@ -95,7 +95,7 @@ jobs:
           DEFINES+=("--dart-define=APP_VERSION=$VERSION")
           if [ -z "$API_URL" ]; then echo "::warning::Repository variable API_URL is not set — the app will try http://10.0.2.2:3000 (the Android emulator's localhost)."; fi
           set -o pipefail
-          flutter build apk --release --build-number=${{ github.run_number }} "${DEFINES[@]}" 2>&1 | tee ../ci-build.txt
+          flutter build apk --release --target-platform android-arm,android-arm64 --build-number=${{ github.run_number }} "${DEFINES[@]}" 2>&1 | tee ../ci-build.txt
           if [ -f android/key.properties ]; then flutter build appbundle --release --build-number=${{ github.run_number }} "${DEFINES[@]}" 2>&1 | tee -a ../ci-build.txt; fi
           cp build/app/outputs/flutter-apk/app-release.apk "build/invite-karoo-$VERSION-${{ github.run_number }}.apk"
 
@@ -107,6 +107,17 @@ jobs:
             app/build/app/outputs/bundle/release/app-release.aab
           if-no-files-found: error
           retention-days: 30
+
+      - name: Put the APK on the Releases page
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          APK=$(ls app/build/invite-karoo-*.apk)
+          gh release delete android-latest --yes --cleanup-tag 2>/dev/null || true
+          gh release create android-latest "$APK" --prerelease --target "${{ github.sha }}" \
+            --title "Android test build ${{ github.run_number }}" \
+            --notes "Latest Android test build (run ${{ github.run_number }}). Open this page on the phone, tap the .apk file, and allow installing from this source when Android asks."
 
       - name: Save the logs for review
         if: always()
