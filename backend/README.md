@@ -28,7 +28,7 @@ Tests (needs a database called `invitekaroo_test`): `npm test`
 
 ## Deploy on Railway
 
-1. railway.app → New Project → **Deploy from GitHub repo** → pick this repo, set **Root Directory** to `backend`.
+1. railway.app → New Project → **Deploy from GitHub repo** → pick this repo. Leave **Root Directory** empty: the root `Dockerfile` builds the API **and** the Admin Dashboard (served at `/admin`). Setting it to `backend` deploys the API alone.
 2. In the same project: **New → Database → PostgreSQL**.
 3. In the backend service → **Variables**, add:
    - `DATABASE_URL` = `${{Postgres.DATABASE_URL}}`
@@ -36,9 +36,9 @@ Tests (needs a database called `invitekaroo_test`): `npm test`
    - `PUBLIC_URL` = the service's public URL (Settings → Networking → Generate Domain)
    - `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `JWT_ADMIN_SECRET` = three different long random strings
    - `DEV_OTP` = *(empty)*
-   - `CORS_ORIGINS` = the Admin Dashboard URL
+   - `ADMIN_EMAIL`, `ADMIN_PASSWORD` (10+ characters) = the first dashboard sign-in, created automatically on the first start
    - WhatsApp, Firebase and AI keys below when you have them
-4. Deploy. Migrations run on every start. Then open the service shell and run `npm run seed:admin` once (with `ADMIN_EMAIL` / `ADMIN_PASSWORD` set).
+4. Deploy. Migrations run on every start, and the first admin is created when there is none. The dashboard is at `https://<your-domain>/admin/`.
 
 With `STORAGE_DRIVER=local` uploads live on the container disk and are lost on redeploy — switch to `firebase` before real use.
 

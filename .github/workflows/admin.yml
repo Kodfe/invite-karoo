@@ -1,0 +1,25 @@
+name: Admin
+
+on:
+  push:
+    paths: ['admin/**', '.github/workflows/admin.yml']
+  pull_request:
+    paths: ['admin/**']
+
+jobs:
+  build:
+    name: Typecheck and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: admin
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: admin/package-lock.json
+      - run: npm ci
+      - run: npm run build

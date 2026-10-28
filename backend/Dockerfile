@@ -16,6 +16,8 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/drizzle ./drizzle
 COPY package.json ./
+# local file storage (STORAGE_DRIVER=local) writes here
+RUN mkdir -p /app/uploads && chown node:node /app/uploads
 USER node
 EXPOSE 3000
 # migrations run automatically on start (see src/main.ts)

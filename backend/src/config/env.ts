@@ -29,6 +29,8 @@ const schema = z.object({
 
   STORAGE_DRIVER: z.enum(['local', 'firebase']).default('local'),
   UPLOAD_DIR: z.string().default('./uploads'),
+  /** the built Admin Dashboard (admin/dist), served at /admin when the folder exists */
+  ADMIN_DIR: z.string().default('./public/admin'),
 
   ANTHROPIC_API_KEY: z.string().default(''),
   AI_MODEL: z.string().default('claude-sonnet-5-5'),
