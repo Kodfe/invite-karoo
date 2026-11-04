@@ -1,6 +1,7 @@
 'use client';
 import { FormEvent, useState } from 'react';
-import { api, can, Role } from '../api';
+import { can, Role } from '../api';
+import * as store from '../data';
 import { useAuth } from '../auth';
 import { ago, Btn, Empty, ErrorNote, Field, Loading, Modal, PageHead, Pill, useAction, useConfirm, useLoad } from '../ui';
 
@@ -14,7 +15,7 @@ const ROLE_HELP: Record<Role, string> = {
 
 export function TeamPage() {
   const { admin } = useAuth();
-  const list = useLoad(() => api.get<Member[]>('/team'), []);
+  const list = useLoad(() => store.team() as Promise<Member[]>, []);
   const [edit, setEdit] = useState<Member | 'new' | null>(null);
   const confirm = useConfirm();
   const act = useAction();
@@ -23,7 +24,7 @@ export function TeamPage() {
 
   const toggle = async (m: Member) => {
     if (m.active && !(await confirm({ title: `Turn off ${m.name}?`, body: 'They will not be able to sign in. You can turn them back on later.', ok: 'Turn off', danger: true }))) return;
-    await act.run(() => api.patch(`/team/${m.id}`, { active: !m.active }), m.active ? `${m.name} can no longer sign in` : `${m.name} can sign in again`);
+    await act.run(() => store.editMember(m.id, { active: !m.active }), m.active ? `${m.name} can no longer sign in` : `${m.name} can sign in again`);
     list.reload();
   };
 
@@ -96,8 +97,8 @@ function MemberForm({ member, onClose, onSaved }: { member: Member | null; onClo
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     const r = member
-      ? await act.run(() => api.patch(`/team/${member.id}`, { name, role, ...(password ? { password } : {}) }), 'Saved')
-      : await act.run(() => api.post('/team', { name, email, role, password }), `${name} added`);
+      ? await act.run(() => store.editMember(member.id, { name, role, ...(password ? { password } : {}) }), 'Saved')
+      : await act.run(() => store.addMember({ name, email, role, password }), `${name} added`);
     if (r) onSaved();
   };
 

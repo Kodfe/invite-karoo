@@ -1,10 +1,9 @@
-import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { getStorage } from 'firebase-admin/storage';
 import { env } from '../../config/env';
-import { AppError } from '../../common/errors';
+import { AppError } from '../../common/app-error';
 import { firebaseApp } from './firebase';
 
 export type Stored = { key: string; url: string; name: string; size: number; contentType: string };
@@ -30,7 +29,6 @@ const LIMIT_MB: Record<string, number> = { image: 10, pdf: 15, audio: 20, video:
  *   local     ./uploads, served at /files/<key> (development)
  *   firebase  Firebase Storage, served by an unguessable download-token URL
  */
-@Injectable()
 export class StorageService {
   check(kind: keyof typeof ALLOWED, file: { mimetype: string; size: number; originalname: string }) {
     const okType = ALLOWED[kind].includes(file.mimetype) || (kind === 'sheet' && /\.(xlsx?|csv|xml)$/i.test(file.originalname));

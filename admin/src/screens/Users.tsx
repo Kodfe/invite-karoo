@@ -1,7 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { Link } from '../nav';
-import { api } from '../api';
+import * as store from '../data';
 import { Empty, ErrorNote, fmtDay, Loading, PageHead, Pager, useDebounced, useLoad } from '../ui';
 
 const LANG: Record<string, string> = { en: 'English', hi: 'हिन्दी', ta: 'தமிழ்', gu: 'ગુજરાતી' };
@@ -11,7 +11,7 @@ export function UsersPage() {
   const [q, setQ] = useState('');
   const [offset, setOffset] = useState(0);
   const dq = useDebounced(q);
-  const list = useLoad(() => api.get('/users', { q: dq, limit: LIMIT, offset }), [dq, offset]);
+  const list = useLoad(() => store.users({ q: dq, limit: LIMIT, offset }), [dq, offset]);
 
   return (
     <>

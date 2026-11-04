@@ -20,8 +20,6 @@ import { AiScanService } from './modules/events/ai-scan.service';
 import { NotificationsController } from './modules/notifications/notifications.controller';
 import { SupportController } from './modules/support/support.controller';
 import { RemindersService } from './modules/reminders/reminders.service';
-import { AdminController } from './modules/admin/admin.controller';
-import { AdminWeddingsService } from './modules/admin/admin-weddings.service';
 import { ConfigController } from './modules/config/config.controller';
 
 const isTest = env().NODE_ENV === 'test';
@@ -41,7 +39,6 @@ const isTest = env().NODE_ENV === 'test';
     EventsController,
     NotificationsController,
     SupportController,
-    AdminController,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },
@@ -54,7 +51,6 @@ const isTest = env().NODE_ENV === 'test';
     SheetService,
     AiScanService,
     RemindersService,
-    AdminWeddingsService,
   ],
 })
 export class AppModule {}

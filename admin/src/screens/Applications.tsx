@@ -1,7 +1,8 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useQueryParam } from '../nav';
-import { api, can } from '../api';
+import { can } from '../api';
+import * as store from '../data';
 import { useAuth } from '../auth';
 import { ago, Btn, Empty, ErrorNote, Field, fmtDay, fmtRange, fmtSize, fmtWhen, Loading, Note, PageHead, Pager, Pill, Tabs, useAction, useConfirm, useLoad } from '../ui';
 import { ImportReport } from './Wedding';
@@ -12,7 +13,7 @@ type Status = '' | 'new' | 'in_setup' | 'live' | 'rejected';
 export function ApplicationsPage() {
   const [status, setStatus] = useState<Status>('new');
   const [offset, setOffset] = useState(0);
-  const list = useLoad(() => api.get('/applications', { status, limit: LIMIT, offset }), [status, offset]);
+  const list = useLoad(() => store.applications({ status, limit: LIMIT, offset }), [status, offset]);
 
   return (
     <>
@@ -89,8 +90,8 @@ export function ApplicationPage() {
   const { admin } = useAuth();
   const nav = useNavigate();
   const confirm = useConfirm();
-  const app = useLoad(() => (id ? api.get(`/applications/${id}`) : new Promise<never>(() => {})), [id]);
-  const team = useLoad(() => (can(admin?.role, 'admin') ? api.get<any[]>('/team') : Promise.resolve([] as any[])), [admin?.role]);
+  const app = useLoad(() => (id ? store.application(id) : new Promise<never>(() => {})), [id]);
+  const team = useLoad(() => (can(admin?.role, 'admin') ? store.team() : Promise.resolve([] as any[])), [admin?.role]);
   const [notes, setNotes] = useState('');
   const [created, setCreated] = useState<any>(null);
   const act = useAction();
@@ -107,7 +108,7 @@ export function ApplicationPage() {
   const isSetup = can(admin?.role, 'setup');
 
   const patch = async (b: Record<string, unknown>, ok: string) => {
-    const r = await act.run(() => api.patch(`/applications/${id}`, b), ok);
+    const r = await act.run(() => store.patchApplication(id, b), ok);
     if (r) app.reload();
   };
   const createWedding = async () => {
@@ -121,7 +122,7 @@ export function ApplicationPage() {
       ok: 'Create wedding',
     });
     if (!ok) return;
-    const r = await act.run(() => api.post(`/applications/${id}/create-wedding`), 'Wedding created');
+    const r = await act.run(() => store.weddingFromApplication(id), 'Wedding created');
     if (r) {
       if (r.import) {
         setCreated(r);
@@ -216,7 +217,7 @@ export function ApplicationPage() {
                   {a.cardFile.name} · {fmtSize(a.cardFile.size)}
                 </span>
               </div>
-              <Btn small onClick={() => act.run(() => api.download(`/applications/${id}/file/card`, a.cardFile.name))}>
+              <Btn small onClick={() => act.run(() => store.openFile(a.cardFile.key).then(() => true))}>
                 Download
               </Btn>
             </div>
@@ -229,7 +230,7 @@ export function ApplicationPage() {
                   {a.guestFile.name} · {fmtSize(a.guestFile.size)}
                 </span>
               </div>
-              <Btn small onClick={() => act.run(() => api.download(`/applications/${id}/file/guests`, a.guestFile.name))}>
+              <Btn small onClick={() => act.run(() => store.openFile(a.guestFile.key).then(() => true))}>
                 Download
               </Btn>
             </div>

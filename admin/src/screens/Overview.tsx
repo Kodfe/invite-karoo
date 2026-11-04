@@ -1,17 +1,15 @@
 'use client';
 import { Link } from '../nav';
-import { api } from '../api';
+import * as store from '../data';
 import { useAuth } from '../auth';
 import { ago, Empty, ErrorNote, fmtRange, Loading, PageHead, Pill, useLoad } from '../ui';
 
-type Stats = { users: number; newUsers7d: number; weddings: number; liveWeddings: number; guests: number; newApplications: number; openTickets: number; replies7d: number };
-
 export function OverviewPage() {
   const { admin } = useAuth();
-  const stats = useLoad(() => api.get<Stats>('/stats'), []);
-  const apps = useLoad(() => api.get('/applications', { status: 'new', limit: 5 }), []);
-  const tickets = useLoad(() => api.get('/tickets', { status: 'open', limit: 5 }), []);
-  const soon = useLoad(() => api.get('/weddings', { limit: 6 }), []);
+  const stats = useLoad(() => store.stats(), []);
+  const apps = useLoad(() => store.applications({ status: 'new', limit: 5 }), []);
+  const tickets = useLoad(() => store.tickets({ status: 'open', limit: 5 }), []);
+  const soon = useLoad(() => store.weddings({ limit: 6 }), []);
   const s = stats.data;
 
   return (

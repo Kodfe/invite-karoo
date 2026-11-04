@@ -1,4 +1,3 @@
-import { FirebaseApp, getApp, getApps, initializeApp } from 'firebase/app';
 import {
   Auth,
   EmailAuthProvider,
@@ -12,26 +11,18 @@ import {
   signOut,
   updatePassword,
 } from 'firebase/auth';
+import { firebase, firebaseConfigured } from '../firebase';
 import { AuthBackend, AuthError } from './types';
-
-const config = {
-  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
-  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-};
 
 let auth: Auth | null = null;
 
 /** created on first use in the browser, never during the static build */
 function a(): Auth {
   if (auth) return auth;
-  if (!config.apiKey || !config.projectId) {
+  if (!firebaseConfigured()) {
     throw new AuthError('NOT_CONFIGURED', 'Sign-in is not set up: the NEXT_PUBLIC_FIREBASE_* settings are missing from this build.');
   }
-  const app: FirebaseApp = getApps().length ? getApp() : initializeApp(config);
-  auth = getAuth(app);
+  auth = getAuth(firebase().app);
   void setPersistence(auth, browserLocalPersistence).catch(() => {});
   return auth;
 }
@@ -79,14 +70,6 @@ export const authBackend: AuthBackend = {
   },
   signIn: (email, password) => wrap(async () => void (await signInWithEmailAndPassword(a(), email, password))),
   signOut: () => wrap(() => signOut(a())),
-  async idToken(force) {
-    try {
-      const u = a().currentUser;
-      return u ? await u.getIdToken(force) : null;
-    } catch {
-      return null;
-    }
-  },
   resetPassword: (email) => wrap(() => sendPasswordResetEmail(a(), email)),
   changePassword: (current, next) =>
     wrap(async () => {

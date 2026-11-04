@@ -1,9 +1,57 @@
 rules_version = '2';
-// Files are uploaded by the API and shared through download-token links; no client access.
+// The Admin Dashboard uploads wedding files directly; the app's files go through the REST API.
+// Guests see files through the download-token links stored in Firestore, which skip these rules.
+// The role here is the token's ikRole claim: a switched-off account's token keeps working for
+// Storage until it expires (at most an hour), though it can no longer be refreshed.
 service firebase.storage {
   match /b/{bucket}/o {
+    function team() {
+      return request.auth != null && request.auth.token.ikRole in ['admin', 'setup', 'support'];
+    }
+    function setup() {
+      return request.auth != null && request.auth.token.ikRole in ['admin', 'setup'];
+    }
+    function mb(n) {
+      return request.resource.size <= n * 1024 * 1024;
+    }
+    function image() {
+      return request.resource.contentType.matches('image/(jpeg|png|webp|heic|heif)') && mb(10);
+    }
+    function video() {
+      return request.resource.contentType.matches('video/(mp4|quicktime)') && mb(30);
+    }
+    function pdf() {
+      return request.resource.contentType == 'application/pdf' && mb(15);
+    }
+    function audio() {
+      return request.resource.contentType.matches('audio/(mpeg|mp4|aac|x-m4a|wav|ogg|webm)') && mb(20);
+    }
+
     match /{allPaths=**} {
-      allow read, write: if false;
+      allow read: if team();
+    }
+    match /weddings/{w}/cover/{file} {
+      allow create: if setup() && (image() || video());
+      allow delete: if setup();
+    }
+    match /weddings/{w}/couple/{file} {
+      allow create: if setup() && image();
+      allow delete: if setup();
+    }
+    match /weddings/{w}/family/{file} {
+      allow create: if setup() && image();
+      allow delete: if setup();
+    }
+    match /weddings/{w}/people/{file} {
+      allow create: if setup() && image();
+    }
+    match /weddings/{w}/card/{file} {
+      allow create: if setup() && (pdf() || image());
+      allow delete: if setup();
+    }
+    match /weddings/{w}/voice/{file} {
+      allow create: if setup() && audio();
+      allow delete: if setup();
     }
   }
 }

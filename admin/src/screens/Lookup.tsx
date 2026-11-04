@@ -1,7 +1,7 @@
 'use client';
 import { FormEvent, useEffect, useState } from 'react';
 import { Link, useQueryParam } from '../nav';
-import { api } from '../api';
+import * as store from '../data';
 import { Btn, Empty, ErrorNote, Field, PageHead, Pill, useAction } from '../ui';
 
 type Hit = { guestId: string; name: string; active: boolean; weddingId: string; wedding: string; invites: number };
@@ -15,7 +15,7 @@ export function LookupPage() {
   const search = async (value: string) => {
     const digits = value.replace(/\D/g, '');
     if (digits.length < 6) return act.setError('Enter at least 6 digits of the number');
-    const r = await act.run(() => api.get<Hit[]>(`/lookup/phone/${encodeURIComponent(digits)}`));
+    const r = await act.run(() => store.lookupPhone(digits));
     if (r) setHits(r);
   };
   const submit = (e: FormEvent) => {

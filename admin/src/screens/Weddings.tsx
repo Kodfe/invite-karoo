@@ -1,7 +1,8 @@
 'use client';
 import { useState } from 'react';
 import { Link, useNavigate } from '../nav';
-import { api, can } from '../api';
+import { can } from '../api';
+import * as store from '../data';
 import { useAuth } from '../auth';
 import { Btn, Empty, ErrorNote, fmtRange, Loading, Modal, PageHead, Pager, Pill, Tabs, useAction, useDebounced, useLoad } from '../ui';
 import { emptyWedding, WeddingForm, weddingPayload } from './WeddingForm';
@@ -17,7 +18,7 @@ export function WeddingsPage() {
   const [offset, setOffset] = useState(0);
   const [creating, setCreating] = useState(false);
   const dq = useDebounced(q);
-  const list = useLoad(() => api.get('/weddings', { q: dq, status, limit: LIMIT, offset }), [dq, status, offset]);
+  const list = useLoad(() => store.weddings({ q: dq, status, limit: LIMIT, offset }), [dq, status, offset]);
   const act = useAction();
 
   return (
@@ -108,7 +109,7 @@ export function WeddingsPage() {
             fields={act.fields}
             onCancel={() => setCreating(false)}
             onSubmit={async (v) => {
-              const r = await act.run(() => api.post('/weddings', weddingPayload(v)), 'Wedding created');
+              const r = await act.run(() => store.createWedding(weddingPayload(v)), 'Wedding created');
               if (r) nav(`/weddings/${r.id}/functions`);
             }}
           />

@@ -1,7 +1,8 @@
 # INVITE KAROO — API (Firebase)
 
 NestJS 11 running on **Cloud Functions (2nd gen, asia-south1)** with **Firestore**, **Firebase Auth**,
-**Cloud Storage** and **FCM**. One API serves the Flutter app (guest + host) and the Admin Dashboard.
+**Cloud Storage** and **FCM**. The REST API serves the Flutter app (guest + host). The Admin Dashboard
+does not use it or NestJS: it works in Firestore directly, with the plain functions in `src/team/`.
 
 | Function | What |
 | --- | --- |
@@ -9,8 +10,12 @@ NestJS 11 running on **Cloud Functions (2nd gen, asia-south1)** with **Firestore
 | `reminders` | every minute: the app's reminders and each guest's own |
 | `blastQueued` | Firestore trigger: sends a WhatsApp blast once it is queued |
 | `blastSweep` | every 5 minutes: resumes blasts that got stuck |
+| `teamMemberAdd`, `teamMemberEdit` | callables: team accounts (admin role) |
+| `guestsImport`, `guestsExport`, `guestsTemplate`, `weddingFromApplication` | callables: Excel work for the dashboard |
+| `teamFunctionChanged`, `teamWeddingChanged`, `teamTicketMessage` | Firestore triggers: tell guests, hosts and users what the team changed |
 
-Data model: `src/db/models.ts`. Firestore is only reached through the API (rules deny all client access).
+Data model: `src/db/models.ts`. The app reaches Firestore only through the API. The dashboard reads and
+writes it directly under `firestore.rules`, which `test/rules.spec.ts` tests on the emulators.
 
 ## Run the tests
 
@@ -32,7 +37,6 @@ Secret Manager (the deploy workflow sets them from GitHub secrets).
 | `ANTHROPIC_API_KEY` | secret | the AI card scan |
 | `NODE_ENV` | env | `production`, or `development` on a test project together with `DEV_OTP=1234` |
 | `WHATSAPP_PROVIDER`, `WHATSAPP_PHONE_NUMBER_ID`, `WA_TEMPLATE_*` | env | WhatsApp sending (`console` logs instead) |
-| `CORS_ORIGINS` | env | `https://admin.invitekaroo.com` |
 | `TEAM_WHATSAPP` | env | the number on "Host a wedding" |
 
 The first dashboard account: `ADMIN_EMAIL` / `ADMIN_PASSWORD` → `npm run seed:admin` (the deploy workflow

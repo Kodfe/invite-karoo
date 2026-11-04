@@ -46,6 +46,7 @@ flutter:
     - assets/art/
     - assets/photos/
     - assets/brand/
+    - assets/demo/
   fonts:
     - family: Cinzel
       fonts:

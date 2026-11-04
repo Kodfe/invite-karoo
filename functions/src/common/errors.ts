@@ -3,31 +3,17 @@ import {
   Catch,
   ExceptionFilter,
   HttpException,
-  HttpStatus,
   Logger,
 } from '@nestjs/common';
 import type { Response } from 'express';
+import { AppError } from './app-error';
+
+export { AppError, conflict, forbidden, notFound } from './app-error';
 
 /**
  * Every error the API returns has the same shape:
  *   { error: { code: 'RSVP_CLOSED', message: 'Replies for this function closed ...', fields?: {...} } }
- * `code` is stable and meant for the app; `message` is human readable English.
  */
-export class AppError extends HttpException {
-  constructor(
-    public readonly code: string,
-    message: string,
-    status: number = HttpStatus.BAD_REQUEST,
-    public readonly fields?: Record<string, string>,
-  ) {
-    super({ code, message, fields }, status);
-  }
-}
-
-export const notFound = (what = 'Item') => new AppError('NOT_FOUND', `${what} not found`, 404);
-export const forbidden = (message = 'You do not have access to this') => new AppError('FORBIDDEN', message, 403);
-export const conflict = (code: string, message: string) => new AppError(code, message, 409);
-
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
   private readonly log = new Logger('API');
@@ -35,8 +21,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
   catch(exception: unknown, host: ArgumentsHost) {
     const res = host.switchToHttp().getResponse<Response>();
     if (exception instanceof AppError) {
-      const body = exception.getResponse() as { code: string; message: string; fields?: unknown };
-      return res.status(exception.getStatus()).json({ error: body });
+      return res.status(exception.status).json({ error: { code: exception.code, message: exception.message, fields: exception.fields } });
     }
     if (exception instanceof HttpException) {
       const status = exception.getStatus();

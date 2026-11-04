@@ -8,7 +8,7 @@ import { data, db, F, getDoc, getRows } from '../../db/store';
 import { NotificationsService } from '../infra/notifications.service';
 import { AuditService } from '../infra/audit.service';
 import { couple } from '../guest/guest.service';
-import { liveFunctions, newGuest, newInvite } from '../admin/admin-weddings.service';
+import { liveFunctions, newGuest, newInvite } from '../../db/rows';
 import { AccessLevel, HostAccessService, HostCtx } from './host-access.service';
 
 export const MAX_FAMILY = 5;

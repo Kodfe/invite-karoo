@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'api.dart';
+import 'demo.dart';
 import 'fb.dart';
 
 /// The signed-in person, which side of the app they are on, and their language.
@@ -31,7 +32,7 @@ class Session extends ChangeNotifier {
   /// bumps whenever something changed that open lists should reload for
   int dataVersion = 0;
 
-  bool get signedIn => tokens.signedIn && me != null;
+  bool get signedIn => (Demo.on || tokens.signedIn) && me != null;
 
   List<Json> get hosting => asList(asJson(me?['host'])['weddings']);
   String get hostAccess => '${asJson(me?['host'])['access'] ?? 'none'}';
@@ -64,8 +65,13 @@ class Session extends ChangeNotifier {
         me = asJson(jsonDecode(cached));
       } catch (_) {}
     }
-    // Firebase Auth keeps the sign-in on the device
-    if (!tokens.signedIn) {
+    if (Demo.on) {
+      // no sign-in: every launch opens as the demo host
+      await Demo.load();
+      onboarded = true;
+      _setMe(Demo.me);
+    } else if (!tokens.signedIn) {
+      // Firebase Auth keeps the sign-in on the device
       me = null;
     } else {
       try {
@@ -100,7 +106,7 @@ class Session extends ChangeNotifier {
 
   /// the body of /auth/otp/verify or /auth/signup when status == signed_in
   Future<void> applySignIn(Json r) async {
-    await tokens.signInWithCustomToken('${r['customToken']}');
+    if (!Demo.on) await tokens.signInWithCustomToken('${r['customToken']}');
     _setMe(asJson(r['me']));
     // a fresh sign-in always starts on the guest side
     mode = 'guest';
@@ -116,7 +122,7 @@ class Session extends ChangeNotifier {
 
   /// after a number change the server hands back a new sign-in for the new number
   Future<void> reSignIn(String customToken) async {
-    await tokens.signInWithCustomToken(customToken);
+    if (!Demo.on) await tokens.signInWithCustomToken(customToken);
   }
 
   void updateMe(Json m) {

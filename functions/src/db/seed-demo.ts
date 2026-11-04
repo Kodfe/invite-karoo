@@ -8,7 +8,7 @@
 import 'dotenv/config';
 import { env } from '../config/env';
 import { localParts, zonedDate } from '../common/time';
-import { newGuest, newInvite } from '../modules/admin/admin-weddings.service';
+import { newGuest, newInvite } from './rows';
 import { DEFAULT_PREFS, DEFAULT_PRIVACY, inviteId, blastId } from './models';
 import { col } from './paths';
 import { Batch, db, getRows, writeAll } from './store';
