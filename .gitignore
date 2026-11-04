@@ -1,5 +1,7 @@
 # secrets — never commit these
 .env
+*.local.json
+.secret.local
 *.keystore
 *.jks
 key.properties

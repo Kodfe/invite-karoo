@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 
 import 'config.dart';
+import 'demo.dart';
 
 typedef Json = Map<String, dynamic>;
 
@@ -56,6 +57,7 @@ class Api {
   Future<dynamic> delete(String path, [Object? body]) => _send('DELETE', path, body: body);
 
   Future<dynamic> _send(String method, String path, {Map<String, dynamic>? query, Object? body, bool retried = false}) async {
+    if (Demo.on) return Demo.answer(method, path, query);
     final req = http.Request(method, uri(path, query));
     req.headers['Accept'] = 'application/json';
     final t = await tokens.idToken(refresh: retried);
@@ -84,6 +86,7 @@ class Api {
   /// multipart upload. [files] maps the form field name to a local file path.
   Future<dynamic> upload(String path,
       {Map<String, String> files = const {}, Map<String, String> fields = const {}, Map<String, dynamic>? query, bool retried = false}) async {
+    if (Demo.on) throw ApiException('DEMO', 'Uploads are not part of the demo.');
     final req = http.MultipartRequest('POST', uri(path, query));
     final t = await tokens.idToken(refresh: retried);
     if (t != null) req.headers['Authorization'] = 'Bearer $t';
@@ -108,6 +111,7 @@ class Api {
 
   /// raw bytes (card PDF, spreadsheet template)
   Future<List<int>> bytes(String path) async {
+    if (Demo.on) throw ApiException('DEMO', 'Downloads are not part of the demo.');
     Future<http.Response> go(bool fresh) async {
       final t = await tokens.idToken(refresh: fresh);
       return _client.get(uri(path), headers: {if (t != null) 'Authorization': 'Bearer $t'});

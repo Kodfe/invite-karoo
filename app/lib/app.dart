@@ -6,6 +6,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'core/api.dart';
 import 'core/art.dart';
+import 'core/demo.dart';
 import 'core/push.dart';
 import 'core/session.dart';
 import 'core/theme.dart';
@@ -43,7 +44,7 @@ class InviteKarooApp extends StatelessWidget {
       builder: (context, child) => MediaQuery(
         // keep the design's proportions even with very large system text
         data: MediaQuery.of(context).copyWith(textScaler: MediaQuery.of(context).textScaler.clamp(maxScaleFactor: 1.25)),
-        child: child!,
+        child: Demo.on ? Banner(message: 'DEMO', location: BannerLocation.topEnd, child: child!) : child!,
       ),
       home: const Root(),
     );
