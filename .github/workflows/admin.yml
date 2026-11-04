@@ -18,7 +18,7 @@ jobs:
     env:
       NEXT_TELEMETRY_DISABLED: '1'
       # placeholders: the build only checks that the site compiles; real values come from the deploy
-            NEXT_PUBLIC_FIREBASE_API_KEY: ci-placeholder
+      NEXT_PUBLIC_FIREBASE_API_KEY: ci-placeholder
       NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: ci-placeholder.firebaseapp.com
       NEXT_PUBLIC_FIREBASE_PROJECT_ID: ci-placeholder
       NEXT_PUBLIC_FIREBASE_APP_ID: ci-placeholder
