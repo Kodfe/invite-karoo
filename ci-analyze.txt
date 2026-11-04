@@ -1,0 +1,7 @@
+Analyzing app...                                                
+
+   info • Statements in an if should be enclosed in a block. Try wrapping the statement in a block • lib/screens/guest/manual.dart:288:32 • curly_braces_in_flow_control_structures
+   info • Unnecessary use of string interpolation. Try replacing the string literal with the variable name • lib/screens/host/host_remind.dart:150:55 • unnecessary_string_interpolations
+   info • Unnecessary use of string interpolation. Try replacing the string literal with the variable name • lib/screens/profile/host_apply.dart:328:96 • unnecessary_string_interpolations
+
+3 issues found. (ran in 15.9s)

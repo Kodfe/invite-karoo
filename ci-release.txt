@@ -1,0 +1,2 @@
+https://github.com/Kodfe/invite-karoo/releases/tag/android-latest
+Published app/build/invite-karoo-1.0.0-8.apk
