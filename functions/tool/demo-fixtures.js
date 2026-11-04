@@ -8,6 +8,7 @@
  * Writes ../app/assets/demo/demo.json. Runs on the in-memory store: nothing touches Firebase.
  */
 const fs = require('node:fs');
+const { createServer } = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 
@@ -27,7 +28,7 @@ delete process.env.FIREBASE_AUTH_EMULATOR_HOST;
 
 const request = require('supertest');
 const dist = (p) => require(path.join(__dirname, '..', 'dist', p));
-const { createApp } = dist('main');
+const { handle } = dist('main');
 const { seedDemo } = dist('db/seed-demo');
 const { fakeAuth } = dist('common/firebase-auth');
 const { col } = dist('db/paths');
@@ -46,9 +47,7 @@ function key(p, query = {}) {
 }
 
 async function main() {
-  const app = await createApp();
-  await app.init();
-  const http = request(app.getHttpServer());
+  const http = request(createServer(handle));
   const { hosted, guestAt } = await seedDemo();
 
   const answers = {};
@@ -137,7 +136,6 @@ async function main() {
   fs.mkdirSync(path.dirname(OUT), { recursive: true });
   fs.writeFileSync(OUT, JSON.stringify({ capturedAt: new Date().toISOString(), get: answers, post }));
   console.log(`${Object.keys(answers).length} answers â†’ ${path.relative(process.cwd(), OUT)} (${Math.round(fs.statSync(OUT).size / 1024)} KB)`);
-  await app.close();
   process.exit(0);
 }
 

@@ -1,4 +1,3 @@
-import { Injectable, Logger } from '@nestjs/common';
 import { env } from '../../config/env';
 import { col } from '../../db/paths';
 import { F } from '../../db/store';
@@ -17,9 +16,8 @@ export type WaResult = { ok: boolean; providerId?: string; error?: string };
  *   invite    {{1}} guest  {{2}} couple  {{3}} function  {{4}} date & time  {{5}} venue
  *   reminder  {{1}} guest  {{2}} function  {{3}} couple  {{4}} date & time  {{5}} venue
  */
-@Injectable()
 export class WhatsappService {
-  private readonly log = new Logger('WhatsApp');
+  private readonly log = console;
   /** the last messages sent in console mode — tests read this */
   readonly outbox: { to: string; template: WaTemplate; params: string[] }[] = [];
 

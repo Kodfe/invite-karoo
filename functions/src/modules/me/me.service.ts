@@ -1,6 +1,5 @@
-import { Injectable } from '@nestjs/common';
 import { auth } from '../../common/firebase-auth';
-import { notFound } from '../../common/errors';
+import { notFound } from '../../common/app-error';
 import { sha256 } from '../../common/crypto';
 import { prettyPhone, splitE164 } from '../../common/phone';
 import { col, group } from '../../db/paths';
@@ -22,7 +21,6 @@ export async function guestRowsForPhone(phone: string) {
   return getRows<Guest>(group.guests().where('phone', '==', phone).where('active', '==', true));
 }
 
-@Injectable()
 export class MeService {
   async user(userId: string) {
     const u = await getDoc<User>(col.users().doc(userId));

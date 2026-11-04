@@ -1,8 +1,9 @@
 # INVITE KAROO — API (Firebase)
 
-NestJS 11 running on **Cloud Functions (2nd gen, asia-south1)** with **Firestore**, **Firebase Auth**,
-**Cloud Storage** and **FCM**. The REST API serves the Flutter app (guest + host). The Admin Dashboard
-does not use it or NestJS: it works in Firestore directly, with the plain functions in `src/team/`.
+Plain TypeScript, no web framework, on **Cloud Functions (2nd gen, asia-south1)** with **Firestore**, **Firebase Auth**,
+**Cloud Storage** and **FCM**. The whole backend is Firebase. The REST API serves the Flutter app (guest + host): one `onRequest`
+function with a small route table (`src/common/http.ts`, routes in `src/modules/*/*.routes.ts`). The Admin
+Dashboard does not use it: it works in Firestore directly, with the functions in `src/team/`.
 
 | Function | What |
 | --- | --- |
@@ -38,6 +39,7 @@ Secret Manager (the deploy workflow sets them from GitHub secrets).
 | `NODE_ENV` | env | `production`, or `development` on a test project together with `DEV_OTP=1234` |
 | `WHATSAPP_PROVIDER`, `WHATSAPP_PHONE_NUMBER_ID`, `WA_TEMPLATE_*` | env | WhatsApp sending (`console` logs instead) |
 | `TEAM_WHATSAPP` | env | the number on "Host a wedding" |
+| `STORAGE_BUCKET` | env | optional: another Storage bucket. Firebase reserves the `FIREBASE_` prefix in `functions/.env`. |
 
 The first dashboard account: `ADMIN_EMAIL` / `ADMIN_PASSWORD` → `npm run seed:admin` (the deploy workflow
 runs it after every deploy; it only creates the account when it does not exist).

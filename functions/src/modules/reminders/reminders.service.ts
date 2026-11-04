@@ -1,4 +1,3 @@
-import { Injectable, Logger } from '@nestjs/common';
 import { APP_DEFAULT_REMINDERS, clock12, dayLabel } from '../../common/time';
 import { col, group } from '../../db/paths';
 import { Fn, Guest, Invite, Wedding } from '../../db/models';
@@ -17,9 +16,8 @@ const GRACE_MS = 10 * 60_000;
  * so a moved function re-arms by construction. A fire is keyed on the start it was
  * computed against, so a moved function fires again at its new time.
  */
-@Injectable()
 export class RemindersService {
-  private readonly log = new Logger('Reminders');
+  private readonly log = console;
 
   constructor(
     private readonly notifications: NotificationsService,

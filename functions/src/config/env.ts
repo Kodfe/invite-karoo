@@ -9,8 +9,6 @@ const schema = z.object({
   /** only for running the API outside Cloud Functions (npm run dev) */
   PORT: z.coerce.number().catch(3000),
   PUBLIC_URL: z.string().default('https://api.invitekaroo.com'),
-  /** web origins allowed to call the API (the Admin Dashboard) */
-  CORS_ORIGINS: z.string().default('https://admin.invitekaroo.com'),
 
   /** secret: salts the OTP code hashes */
   OTP_SECRET: z.string().default('dev-otp-secret'),
@@ -28,7 +26,8 @@ const schema = z.object({
 
   /** only needed outside Google Cloud (local dev against a real project) */
   FIREBASE_SERVICE_ACCOUNT_JSON: z.string().default(''),
-  FIREBASE_STORAGE_BUCKET: z.string().default(''),
+  /** optional: Firebase reserves the FIREBASE_ prefix in functions/.env, hence the name */
+  STORAGE_BUCKET: z.string().default(''),
 
   /** firebase = Cloud Storage (production); local = ./uploads served at /files (development, tests) */
   STORAGE_DRIVER: z.enum(['local', 'firebase']).default('firebase'),

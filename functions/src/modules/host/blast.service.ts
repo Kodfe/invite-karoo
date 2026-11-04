@@ -1,6 +1,5 @@
-import { Injectable, Logger } from '@nestjs/common';
 import { env } from '../../config/env';
-import { AppError, conflict, notFound } from '../../common/errors';
+import { AppError, conflict, notFound } from '../../common/app-error';
 import { clock12, dayLabel, fnPast } from '../../common/time';
 import { col } from '../../db/paths';
 import { Blast, blastId, Fn, Guest, Invite, Wedding } from '../../db/models';
@@ -23,9 +22,8 @@ type Kind = 'rsvp_request' | 'reminder';
  * Sending runs in the background (a Firestore trigger on the blast, plus a sweep for stuck ones),
  * resumably: each recipient is logged, so a restart mid-blast skips everyone already messaged.
  */
-@Injectable()
 export class BlastService {
-  private readonly log = new Logger('Blast');
+  private readonly log = console;
 
   constructor(
     private readonly access: HostAccessService,

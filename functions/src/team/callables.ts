@@ -8,6 +8,7 @@ import type { FunctionsErrorCode } from 'firebase-functions/v2/https';
 import { z, ZodType } from 'zod';
 import { AppError, conflict, notFound } from '../common/app-error';
 import { auth } from '../common/firebase-auth';
+import { parse } from '../common/zod';
 import { Admin, AdminRole } from '../db/models';
 import { col } from '../db/paths';
 import { F, getDoc } from '../db/store';
@@ -107,17 +108,6 @@ async function teamMember(uid: string | undefined, roles: AdminRole[]) {
   const a = await getDoc<Admin>(col.admins().doc(uid));
   if (!a?.active) throw new AppError('NOT_TEAM', 'This account is not on the Invite Karoo team', 403);
   if (a.role !== 'admin' && !roles.includes(a.role)) throw new AppError('FORBIDDEN', 'You do not have access to this', 403);
-}
-
-function parse<S extends ZodType>(schema: S, value: unknown): z.infer<S> {
-  const r = schema.safeParse(value ?? {});
-  if (r.success) return r.data;
-  const fields: Record<string, string> = {};
-  for (const issue of r.error.issues) {
-    const key = issue.path.join('.') || '_';
-    if (!fields[key]) fields[key] = issue.message;
-  }
-  throw new AppError('VALIDATION', 'Some fields need attention', 422, fields);
 }
 
 /** runs one handler for a signed-in caller; errors reach the browser as { code, status, fields } */

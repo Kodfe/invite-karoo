@@ -1,38 +1,20 @@
-import {
-  CanActivate,
-  createParamDecorator,
-  ExecutionContext,
-  Injectable,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { AppError } from './app-error';
 import { auth } from './firebase-auth';
 
 /** an app user, from their Firebase ID token (uid = users/{uid}) */
 export type UserClaims = { sub: string; phone: string };
 
-function bearer(ctx: ExecutionContext): string | null {
-  const h = ctx.switchToHttp().getRequest().headers?.authorization as string | undefined;
-  if (!h?.startsWith('Bearer ')) return null;
-  return h.slice(7);
-}
+const unauthorized = (message: string) => new AppError('UNAUTHORIZED', message, 401);
 
-@Injectable()
-export class UserGuard implements CanActivate {
-  async canActivate(ctx: ExecutionContext) {
-    const token = bearer(ctx);
-    if (!token) throw new UnauthorizedException('Sign in to continue');
-    let c;
-    try {
-      c = await auth().verifyIdToken(token);
-    } catch {
-      throw new UnauthorizedException('Your session has expired. Sign in again.');
-    }
-    if (!c.phone) throw new UnauthorizedException('Sign in with your mobile number to continue');
-    ctx.switchToHttp().getRequest().user = { sub: c.uid, phone: c.phone } satisfies UserClaims;
-    return true;
+/** who is calling, from the Authorization header */
+export async function signedInUser(header: string | undefined): Promise<UserClaims> {
+  if (!header?.startsWith('Bearer ')) throw unauthorized('Sign in to continue');
+  let c;
+  try {
+    c = await auth().verifyIdToken(header.slice(7));
+  } catch {
+    throw unauthorized('Your session has expired. Sign in again.');
   }
+  if (!c.phone) throw unauthorized('Sign in with your mobile number to continue');
+  return { sub: c.uid, phone: c.phone };
 }
-
-export const CurrentUser = createParamDecorator((_: unknown, ctx: ExecutionContext): UserClaims => {
-  return ctx.switchToHttp().getRequest().user;
-});

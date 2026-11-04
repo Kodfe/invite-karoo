@@ -1,4 +1,4 @@
-import { INestApplication } from '@nestjs/common';
+import { createServer, Server } from 'node:http';
 import request from 'supertest';
 
 /**
@@ -23,7 +23,7 @@ export function testEnv() {
   });
 }
 
-export async function boot(): Promise<INestApplication> {
+export async function boot(): Promise<Server> {
   testEnv();
   const { resetEnvCache } = await import('../src/config/env');
   resetEnvCache();
@@ -34,10 +34,8 @@ export async function boot(): Promise<INestApplication> {
   await resetAuthEmulator();
   const { seedAdmin } = await import('../src/db/seed-admin');
   await seedAdmin();
-  const { createApp } = await import('../src/main');
-  const app = await createApp();
-  await app.init();
-  return app;
+  const { handle } = await import('../src/main');
+  return createServer(handle);
 }
 
 const emu = () => process.env.FIREBASE_AUTH_EMULATOR_HOST;
@@ -73,8 +71,8 @@ export async function passwordSignIn(email: string, password: string) {
   return fakeAuth().signInWithPassword(email, password);
 }
 
-export async function signIn(app: INestApplication, mobile: string, profile = { firstName: 'Test', familyName: 'User', city: 'Guwahati' }) {
-  const http = request(app.getHttpServer());
+export async function signIn(app: Server, mobile: string, profile = { firstName: 'Test', familyName: 'User', city: 'Guwahati' }) {
+  const http = request(app);
   await http.post('/v1/auth/otp/request').send({ cc: '+91', mobile }).expect(200);
   const r = await http.post('/v1/auth/otp/verify').send({ cc: '+91', mobile, code: '1234', profile }).expect(200);
   return { token: await idTokenFromCustom(r.body.customToken), me: r.body.me };

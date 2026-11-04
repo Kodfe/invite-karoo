@@ -1,6 +1,5 @@
-import { Injectable } from '@nestjs/common';
 import { env } from '../../config/env';
-import { AppError } from '../../common/errors';
+import { AppError } from '../../common/app-error';
 import { auth } from '../../common/firebase-auth';
 import { randomDigits, randomToken, sha256, safeEqual } from '../../common/crypto';
 import { prettyPhone } from '../../common/phone';
@@ -22,7 +21,6 @@ export type Profile = { firstName: string; familyName: string; city: string; lan
  * WhatsApp code sign-in. A confirmed number gets a Firebase custom token (uid = users/{uid},
  * claim `phone`); the app signs in with it and from then on sends Firebase ID tokens.
  */
-@Injectable()
 export class AuthService {
   constructor(
     private readonly wa: WhatsappService,

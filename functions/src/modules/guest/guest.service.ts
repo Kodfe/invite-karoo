@@ -1,9 +1,8 @@
-import { Injectable } from '@nestjs/common';
 import { col, group } from '../../db/paths';
 import { Access, Fn as FnDoc, Guest, Invite, Media, User, Wedding } from '../../db/models';
 import { couple } from '../../db/rows';
 import { byIds, F, getDoc, getRows } from '../../db/store';
-import { AppError, notFound } from '../../common/errors';
+import { AppError, notFound } from '../../common/app-error';
 import { prettyPhone } from '../../common/phone';
 import { APP_DEFAULT_REMINDERS, clock12, dayLabel, fnLive, fnPast, localParts, rsvpWindow } from '../../common/time';
 
@@ -23,7 +22,6 @@ export { couple };
  * A context function is built without ever touching an invite row, so it cannot leak one.
  * No number on the guest side is ever about another guest.
  */
-@Injectable()
 export class GuestService {
   private async phoneOf(userId: string) {
     const u = await getDoc<User>(col.users().doc(userId));

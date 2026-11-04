@@ -6,7 +6,7 @@ Firebase Hosting at **https://admin.invitekaroo.com**. There is no server of its
 talks to Firestore and Storage directly (`src/data.ts`), and `firestore.rules` + `storage.rules` decide
 what each team member may do. Team accounts and Excel work are callable functions
 (`functions/src/team/callables.ts`), and notifications follow from the writes in Firestore triggers
-(`functions/src/team/notify.ts`). NestJS is not involved.
+(`functions/src/team/notify.ts`).
 
 ## Run
 
@@ -40,7 +40,13 @@ Add `admin.invitekaroo.com` under Authentication → Settings → **Authorized d
 
 ## Deploy
 
-Firebase Hosting site with target **`admin`**, `public: "admin/out"`, `cleanUrls` off,
+The site can go on either host; the backend stays on Firebase either way.
+
+**Vercel:** import the repository, set **Root Directory** to `admin`, add the `NEXT_PUBLIC_FIREBASE_*`
+values from `.env.example`, and deploy. `vercel.json` carries the same headers as Firebase Hosting. Add
+the Vercel domain under Firebase → Authentication → Settings → **Authorized domains**, or sign-in fails.
+
+**Firebase Hosting:** a Hosting site with target **`admin`**, `public: "admin/out"`, `cleanUrls` off,
 `trailingSlash: true`, and a fallback `404.html` (already in `out/`). Build with the real
 `NEXT_PUBLIC_*` values first, then `firebase deploy --only hosting:admin`.
 Connect the custom domain under Hosting → `admin` site → Add custom domain → `admin.invitekaroo.com`.

@@ -5,6 +5,16 @@ import { env } from '../../config/env';
 export const onGoogle = () => !!process.env.K_SERVICE || !!process.env.FUNCTION_TARGET || !!process.env.FUNCTIONS_EMULATOR;
 export const usingEmulators = () => !!process.env.FIRESTORE_EMULATOR_HOST || !!process.env.FIREBASE_AUTH_EMULATOR_HOST;
 
+/** STORAGE_BUCKET if set, else the project's own bucket, which Firebase gives a deployed function */
+function defaultBucket(): string | undefined {
+  if (env().STORAGE_BUCKET) return env().STORAGE_BUCKET;
+  try {
+    return (JSON.parse(process.env.FIREBASE_CONFIG ?? '{}') as { storageBucket?: string }).storageBucket;
+  } catch {
+    return undefined;
+  }
+}
+
 /** the firebase-admin app. On Cloud Functions it uses the runtime's own credentials. */
 export function adminApp(): App {
   const existing = getApps();
@@ -12,11 +22,11 @@ export function adminApp(): App {
   const json = env().FIREBASE_SERVICE_ACCOUNT_JSON;
   if (json) {
     const sa = JSON.parse(json);
-    return initializeApp({ credential: cert(sa), projectId: sa.project_id, storageBucket: env().FIREBASE_STORAGE_BUCKET || `${sa.project_id}.firebasestorage.app` });
+    return initializeApp({ credential: cert(sa), projectId: sa.project_id, storageBucket: defaultBucket() || `${sa.project_id}.firebasestorage.app` });
   }
   return initializeApp({
     projectId: process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT || (usingEmulators() ? 'demo-invitekaroo' : undefined),
-    storageBucket: env().FIREBASE_STORAGE_BUCKET || undefined,
+    storageBucket: defaultBucket(),
   });
 }
 

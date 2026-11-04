@@ -1,4 +1,4 @@
-import { INestApplication } from '@nestjs/common';
+import type { Server } from 'node:http';
 import request from 'supertest';
 import ExcelJS from 'exceljs';
 import { bearer, boot, idTokenFromCustom, passwordSignIn, signIn } from './setup';
@@ -9,7 +9,7 @@ import { Application, Fn } from '../src/db/models';
 
 /* One wedding, built the way the team will build it, then run from both sides. */
 
-let app: INestApplication;
+let app: Server;
 let http: ReturnType<typeof request>;
 let adminToken: string;
 
@@ -39,11 +39,25 @@ async function sheet(rows: (string | number)[][], functions?: (string | number)[
 
 beforeAll(async () => {
   app = await boot();
-  http = request(app.getHttpServer());
+  http = request(app);
 });
 
-afterAll(async () => {
-  await app.close();
+describe('requests the API cannot use', () => {
+  it('answers in the one error shape', async () => {
+    const none = await http.get('/v1/nothing-here').expect(404);
+    expect(none.body.error.code).toBe('NOT_FOUND');
+    await http.delete('/v1/config').expect(404);
+    const bad = await http.post('/v1/auth/otp/request').set('Content-Type', 'application/json').send('{not json').expect(400);
+    expect(bad.body.error.code).toBe('HTTP_400');
+  });
+
+  it('checks ids and upload fields', async () => {
+    const u = await signIn(app, '9810000600');
+    await http.get('/v1/weddings/not%20an%20id').set(bearer(u.token)).expect(400);
+    await http.post('/v1/me/photo').set(bearer(u.token)).attach('wrong', Buffer.from('x'), 'x.png').expect(400);
+    const missing = await http.post('/v1/me/photo').set(bearer(u.token)).expect(400);
+    expect(missing.body.error.code).toBe('NO_FILE');
+  });
 });
 
 describe('auth', () => {
@@ -398,8 +412,8 @@ describe('changes, reminders and the rest', () => {
   });
 
   it('fires each reminder once, and again after the function moves', async () => {
-    const { RemindersService } = await import('../src/modules/reminders/reminders.service');
-    const svc = app.get(RemindersService);
+    const { svc: services } = await import('../src/services');
+    const svc = services.reminders;
     const start = (await getDoc<Fn>(col.functions(weddingId).doc(fn.reception)))!.startsAt;
     const at = new Date(start.getTime() - 45 * 60_000 + 30_000); // the guest's own 45-minute reminder
     expect(await svc.tick(at)).toBeGreaterThanOrEqual(1);
