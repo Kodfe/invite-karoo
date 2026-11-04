@@ -40,7 +40,7 @@ jobs:
         working-directory: .
         run: |
           set -o pipefail
-          npx --yes firebase-tools@latest emulators:exec --only firestore,auth --project demo-invitekaroo "npm --prefix functions test" 2>&1 | tee ci-emulator-tests.txt
+          npx --yes firebase-tools@latest emulators:exec --only firestore,auth,storage --project demo-invitekaroo "npm --prefix functions test" 2>&1 | tee ci-emulator-tests.txt
 
       - name: Save the log for review
         if: always()

@@ -1,10 +1,177 @@
 rules_version = '2';
-// The app and the Admin Dashboard never read or write Firestore directly: everything goes through
-// the API (Cloud Functions), which uses the Admin SDK and is not bound by these rules.
+// Who may touch Firestore directly:
+//   the Admin Dashboard  signed in with a Firebase email account that has an active admins/{uid}
+//                        record. It does everything below itself; team accounts and Excel work go
+//                        through callable functions (functions/src/team/callables.ts).
+//   the app              never. It goes through the REST API, whose Admin SDK skips these rules.
+// Anything not matched here is denied: otp, phones, signupTickets, devices, notifications, events…
+//
+// The role comes from the admins record, not the token, so turning an account off works at once.
+// Rules cannot hide single fields: whoever may read a document sees all of it.
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /{document=**} {
-      allow read, write: if false;
+    function admins(uid) {
+      return /databases/$(database)/documents/admins/$(uid);
+    }
+    function team() {
+      return request.auth != null && exists(admins(request.auth.uid)) && get(admins(request.auth.uid)).data.active == true;
+    }
+    function setup() {
+      return team() && get(admins(request.auth.uid)).data.role in ['admin', 'setup'];
+    }
+    function me() {
+      return request.auth.uid;
+    }
+    function data() {
+      return request.resource.data;
+    }
+    /** a create: exactly these fields */
+    function fields(names) {
+      return data().keys().hasAll(names) && data().keys().hasOnly(names);
+    }
+    /** an update: nothing but these fields changes */
+    function changes(names) {
+      return data().diff(resource.data).affectedKeys().hasOnly(names);
+    }
+    function text(v, min, max) {
+      return v is string && v.size() >= min && v.size() <= max;
+    }
+    function phone(v) {
+      return v is string && v.matches('^[+][1-9][0-9]{6,14}$');
+    }
+    function phoneOrNull(v) {
+      return v == null || phone(v);
+    }
+    function day(v) {
+      return v is string && v.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+    }
+
+    match /admins/{id} {
+      allow read: if team();
+      // the record itself is written by the teamMember* functions
+      allow update: if team() && id == me() && changes(['lastLoginAt']);
+    }
+
+    match /users/{id} {
+      allow read: if team();
+    }
+
+    match /applications/{id} {
+      allow read: if team();
+      allow update: if team() && changes(['status', 'assignedTo', 'adminNotes', 'updatedAt'])
+        && data().status in ['new', 'in_setup', 'live', 'rejected']
+        && (data().adminNotes == null || text(data().adminNotes, 0, 2000));
+    }
+
+    match /weddings/{w} {
+      function validWedding() {
+        return phone(data().ownerPhone) && phoneOrNull(data().contactPhone)
+          && text(data().city, 2, 40) && day(data().startDate) && day(data().endDate)
+          && data().datesLocked is bool && data().sendingEnabled is bool
+          && data().status in ['draft', 'active', 'paused', 'ended']
+          && text(data().bride.name, 1, 60) && text(data().groom.name, 1, 60);
+      }
+
+      allow read: if team();
+      allow create: if setup() && validWedding() && data().status == 'draft' && data().createdBy == me() && fields([
+        'ownerPhone', 'contactPhone', 'city', 'timezone', 'startDate', 'endDate', 'datesLocked', 'status', 'statusReason',
+        'sendingEnabled', 'bride', 'groom', 'brideFamily', 'groomFamily', 'card', 'voice', 'applicationId', 'handedOverAt',
+        'endedAt', 'createdBy', 'createdAt', 'updatedAt',
+      ]);
+      allow update: if setup() && validWedding() && changes([
+        'ownerPhone', 'contactPhone', 'city', 'timezone', 'startDate', 'endDate', 'datesLocked', 'status', 'statusReason',
+        'sendingEnabled', 'bride', 'groom', 'brideFamily', 'groomFamily', 'card', 'voice', 'handedOverAt', 'endedAt', 'updatedAt',
+      ]);
+
+      match /functions/{f} {
+        function validFunction() {
+          return text(data().name, 1, 60) && data().startsAt is timestamp && text(data().venueName, 1, 100);
+        }
+
+        allow read: if team();
+        allow create: if setup() && validFunction() && data().weddingId == w && fields([
+          'weddingId', 'name', 'startsAt', 'endsAt', 'venueName', 'venueAddress', 'mapsUrl', 'dressCode', 'notes', 'color',
+          'icon', 'giftPlan', 'sort', 'createdAt', 'updatedAt', 'deletedAt',
+        ]);
+        // deleting is soft: deletedAt
+        allow update: if setup() && validFunction() && changes([
+          'name', 'startsAt', 'endsAt', 'venueName', 'venueAddress', 'mapsUrl', 'dressCode', 'notes', 'color', 'icon', 'giftPlan',
+          'sort', 'updatedAt', 'deletedAt',
+        ]);
+      }
+
+      match /guests/{g} {
+        function validGuest() {
+          return text(data().name, 1, 60) && phone(data().phone) && data().side in ['bride', 'groom']
+            && data().expectedPax is int && data().expectedPax >= 1 && data().expectedPax <= 20;
+        }
+
+        allow read: if team();
+        allow create: if setup() && validGuest() && data().weddingId == w && data().active == true && data().createdVia == 'admin'
+          && text(data().qrToken, 16, 64) && fields([
+            'weddingId', 'name', 'phone', 'side', 'relation', 'expectedPax', 'notes', 'active', 'createdVia', 'qrToken', 'createdAt', 'updatedAt',
+          ]);
+        allow update: if setup() && validGuest() && changes(['name', 'phone', 'side', 'relation', 'expectedPax', 'notes', 'active', 'updatedAt']);
+      }
+
+      // the team sets who is invited and who gets a gift; replies belong to the guest and the hosts
+      match /invites/{i} {
+        allow read: if team();
+        allow create: if setup() && data().weddingId == w && i == data().guestId + '_' + data().functionId
+          && data().rsvp == 'none' && data().pax == 0 && data().invited == true && data().giftOut is bool
+          && data().guestReminders.size() == 0 && data().offDefaults.size() == 0 && fields([
+            'weddingId', 'guestId', 'functionId', 'invited', 'notifiedAt', 'rsvp', 'pax', 'respondedAt', 'byHost', 'remark',
+            'giftOut', 'giftOutGiven', 'giftOutGivenAt', 'giftOutGivenBy', 'giftOutMethod', 'callAttempts', 'lastCalledAt',
+            'callOutcome', 'guestReminders', 'offDefaults', 'createdAt', 'updatedAt',
+          ]);
+        allow update: if setup() && changes(['invited', 'giftOut', 'updatedAt']);
+      }
+
+      match /media/{m} {
+        allow read: if team();
+        allow create: if setup() && data().weddingId == w && data().kind in ['cover', 'couple', 'family'] && data().type in ['image', 'video']
+          && data().key.matches('^weddings/' + w + '/.+') && fields(['weddingId', 'kind', 'type', 'key', 'url', 'posterUrl', 'sort', 'createdAt']);
+        allow update: if setup() && changes(['sort']);
+        allow delete: if setup();
+      }
+
+      match /access/{a} {
+        allow read: if team();
+        allow create: if setup() && data().weddingId == w && phone(data().phone) && text(data().name, 1, 60) && text(data().relation, 1, 40)
+          && data().role == 'cohost' && data().addedBy == 'admin:' + me() && data().removedAt == null
+          && fields(['weddingId', 'phone', 'name', 'relation', 'role', 'addedBy', 'addedAt', 'removedAt']);
+        allow update: if setup() && changes(['removedAt']);
+      }
+
+      match /blasts/{b} {
+        allow read: if team();
+      }
+    }
+
+    match /tickets/{t} {
+      allow read: if team();
+      allow update: if team() && changes(['status', 'closedAt', 'updatedAt', 'unreadForTeam', 'unreadForUser'])
+        && data().status in ['open', 'answered', 'closed'];
+
+      match /messages/{m} {
+        allow read: if team();
+        allow create: if team() && data().ticketId == t && data().author == 'team' && data().adminId == me()
+          && text(data().body, 1, 4000) && fields(['ticketId', 'author', 'adminId', 'body', 'createdAt']);
+      }
+    }
+
+    // written alongside each change; only ever added to, and never under another name
+    match /auditLog/{id} {
+      allow create: if team() && data().actorType == 'admin' && data().actorId == me()
+        && fields(['actorType', 'actorId', 'action', 'weddingId', 'data', 'createdAt']);
+    }
+
+    // stats and phone lookup read across every wedding
+    match /{path=**}/guests/{g} {
+      allow read: if team();
+    }
+    match /{path=**}/invites/{i} {
+      allow read: if team();
     }
   }
 }

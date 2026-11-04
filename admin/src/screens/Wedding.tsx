@@ -1,10 +1,12 @@
 'use client';
 import { FormEvent, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useQueryParam } from '../nav';
-import { api, can, fileUrl } from '../api';
+import { can, fileUrl } from '../api';
+import * as store from '../data';
 import { useAuth } from '../auth';
 import { Btn, clock, Empty, ErrorNote, Field, fmtDay, fmtRange, fmtSize, fmtWhen, Loading, Modal, Note, PageHead, Pager, Pill, Tabs, useAction, useConfirm, useDebounced, useLoad, useToast } from '../ui';
 import { WeddingForm, weddingPayload, weddingValues } from './WeddingForm';
+import type { FunctionInput } from '../local';
 
 type Tab = 'details' | 'functions' | 'guests' | 'media' | 'access';
 type W = Record<string, any>;
@@ -14,7 +16,7 @@ export function WeddingPage() {
   const tab = (useQueryParam('tab') || 'details') as Tab;
   const nav = useNavigate();
   const { admin } = useAuth();
-  const w = useLoad(() => (id ? api.get<W>(`/weddings/${id}`) : new Promise<never>(() => {})), [id]);
+  const w = useLoad(() => (id ? (store.getWedding(id) as Promise<W>) : new Promise<never>(() => {})), [id]);
   const confirm = useConfirm();
   const act = useAction();
   const editable = can(admin?.role, 'setup');
@@ -42,7 +44,7 @@ export function WeddingPage() {
       ok: again ? 'Make active' : 'Hand over',
     });
     if (!ok) return;
-    const r = await act.run(() => api.post(`/weddings/${id}/handover`), again ? 'Wedding is active again' : 'Handed over — the host can open the console now');
+    const r = await act.run(() => store.handover(id), again ? 'Wedding is active again' : 'Handed over — the host can open the console now');
     if (r) w.setData(r);
   };
 
@@ -110,13 +112,13 @@ function DetailsTab({ w, editable, onSaved }: { w: W; editable: boolean; onSaved
 
   const saveStatus = async () => {
     if (status === 'ended' && !(await confirm({ title: 'End this wedding?', body: 'Reminders stop and the console becomes read-only for the host.', ok: 'End wedding', danger: true }))) return;
-    const r = await st.run(() => api.patch(`/weddings/${w.id}`, { status, statusReason: reason.trim() || null }), 'Status saved');
+    const r = await st.run(() => store.updateWedding(w.id, { status, statusReason: reason.trim() || null }), 'Status saved');
     if (r) onSaved(r);
   };
   const toggleSending = async () => {
     const off = w.sendingEnabled;
     if (off && !(await confirm({ title: 'Stop WhatsApp sending?', body: 'Invitations and reminders for this wedding will not go out on WhatsApp until you turn it back on. In-app notifications still work.', ok: 'Stop sending', danger: true }))) return;
-    const r = await st.run(() => api.patch(`/weddings/${w.id}`, { sendingEnabled: !off }), off ? 'WhatsApp sending stopped' : 'WhatsApp sending is on');
+    const r = await st.run(() => store.updateWedding(w.id, { sendingEnabled: !off }), off ? 'WhatsApp sending stopped' : 'WhatsApp sending is on');
     if (r) onSaved(r);
   };
 
@@ -133,7 +135,7 @@ function DetailsTab({ w, editable, onSaved }: { w: W; editable: boolean; onSaved
           error={act.error}
           fields={act.fields}
           onSubmit={async (v) => {
-            const r = await act.run(() => api.patch(`/weddings/${w.id}`, weddingPayload(v)), 'Saved');
+            const r = await act.run(() => store.updateWedding(w.id, weddingPayload(v)), 'Saved');
             if (r) onSaved(r);
           }}
         />
@@ -213,7 +215,7 @@ function FunctionsTab({ w, editable, reload }: { w: W; editable: boolean; reload
       danger: true,
     });
     if (!ok) return;
-    if (await act.run(() => api.delete(`/weddings/${w.id}/functions/${f.id}`), `${f.name} deleted`)) reload();
+    if (await act.run(() => store.deleteFunction(w.id, f.id), `${f.name} deleted`)) reload();
   };
 
   return (
@@ -326,7 +328,7 @@ function FunctionForm({ w, f, onClose, onSaved }: { w: W; f: Fn | null; onClose:
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     const nul = (s: string) => (s.trim() ? s.trim() : null);
-    const body: Record<string, unknown> = {
+    const body: FunctionInput = {
       name: v.name.trim(),
       date: v.date,
       start: v.start,
@@ -341,8 +343,8 @@ function FunctionForm({ w, f, onClose, onSaved }: { w: W; f: Fn | null; onClose:
     if (v.color) body.color = v.color;
     if (v.icon) body.icon = v.icon;
     const r = f
-      ? await act.run(() => api.patch(`/weddings/${w.id}/functions/${f.id}`, body), 'Function saved')
-      : await act.run(() => api.post(`/weddings/${w.id}/functions`, body), `${v.name} added`);
+      ? await act.run(() => store.updateFunction(w.id, f.id, body), 'Function saved')
+      : await act.run(() => store.addFunction(w.id, body), `${v.name} added`);
     if (r) onSaved();
   };
 
@@ -441,14 +443,14 @@ function GuestsTab({ w, editable, reload }: { w: W; editable: boolean; reload: (
   const [edit, setEdit] = useState<W | 'new' | null>(null);
   const [importing, setImporting] = useState(false);
   const dq = useDebounced(q);
-  const list = useLoad(() => api.get(`/weddings/${w.id}/guests`, { q: dq, removed: removed ? '1' : '0', limit: GLIMIT, offset }), [w.id, dq, removed, offset]);
+  const list = useLoad(() => store.guests(w.id, { q: dq, removed, limit: GLIMIT, offset }), [w.id, dq, removed, offset]);
   const act = useAction();
   const confirm = useConfirm();
   const fns: Fn[] = w.functions;
 
   const setActive = async (g: W, active: boolean) => {
     if (!active && !(await confirm({ title: `Take ${g.name} off the list?`, body: 'They stop seeing this wedding in the app. You can put them back from “Removed”.', ok: 'Remove', danger: true }))) return;
-    if (await act.run(() => api.patch(`/weddings/${w.id}/guests/${g.id}`, { active }), active ? `${g.name} is back on the list` : `${g.name} removed`)) {
+    if (await act.run(() => store.setGuestActive(w.id, g.id, active), active ? `${g.name} is back on the list` : `${g.name} removed`)) {
       list.reload();
       reload();
     }
@@ -480,10 +482,10 @@ function GuestsTab({ w, editable, reload }: { w: W; editable: boolean; reload: (
           </label>
         </div>
         <div className="row">
-          <Btn small onClick={() => act.run(() => api.download('/guest-template', 'invite-karoo-guest-list.xlsx'))}>
+          <Btn small onClick={() => act.run(() => store.guestTemplate())}>
             Blank template
           </Btn>
-          <Btn small onClick={() => act.run(() => api.download(`/weddings/${w.id}/guests/export`, 'guests.xlsx'))}>
+          <Btn small onClick={() => act.run(() => store.exportGuests(w.id))}>
             Export
           </Btn>
           {editable ? (
@@ -627,7 +629,7 @@ function GuestForm({ w, g, onClose, onSaved }: { w: W; g: W | null; onClose: () 
     const functions = fns.filter((f) => picked[f.id]?.on).map((f) => ({ functionId: f.id, giftOut: picked[f.id].giftOut }));
     if (!functions.length) return act.setError('Pick at least one function');
     const body = { ...v, name: v.name.trim(), relation: v.relation.trim(), notes: v.notes.trim(), expectedPax: Number(v.expectedPax) || 1, functions };
-    const r = g ? await act.run(() => api.put(`/weddings/${w.id}/guests/${g.id}`, body), 'Guest saved') : await act.run(() => api.post(`/weddings/${w.id}/guests`, body), `${body.name} added`);
+    const r = await act.run(() => store.saveGuest(w.id, g ? g.id : null, body), g ? 'Guest saved' : `${body.name} added`);
     if (r) onSaved();
   };
 
@@ -789,11 +791,7 @@ function ImportDialog({ w, onClose, onDone }: { w: W; onClose: () => void; onDon
   const [result, setResult] = useState<any>(null);
   const act = useAction();
 
-  const send = (dryRun: boolean) => {
-    const fd = new FormData();
-    fd.append('file', file!);
-    return api.upload(`/weddings/${w.id}/guests/import`, fd, { mode, dryRun: String(dryRun), createFunctions: String(createFunctions) });
-  };
+  const send = (dryRun: boolean) => store.importGuests(w.id, file!, { mode, dryRun, createFunctions });
   const check = async () => {
     setPreview(null);
     const r = await act.run(() => send(true));
@@ -911,14 +909,12 @@ function MediaTab({ w, editable, setW, reload }: { w: W; editable: boolean; setW
   const confirm = useConfirm();
   const [uploading, setUploading] = useState<string | null>(null);
 
-  const addMedia = async (kind: string, files: FileList | null) => {
+  const addMedia = async (kind: 'cover' | 'couple' | 'family', files: FileList | null) => {
     if (!files?.length) return;
     setUploading(kind);
     let n = 0;
     for (const file of Array.from(files)) {
-      const fd = new FormData();
-      fd.append('file', file);
-      const r = await act.run(() => api.upload(`/weddings/${w.id}/media`, fd, { kind }));
+      const r = await act.run(() => store.addMedia(w.id, kind, file));
       if (!r) break;
       n++;
     }
@@ -931,11 +927,11 @@ function MediaTab({ w, editable, setW, reload }: { w: W; editable: boolean; setW
     const j = idx + dir;
     if (j < 0 || j >= items.length) return;
     [items[idx], items[j]] = [items[j], items[idx]];
-    if (await act.run(() => api.put(`/weddings/${w.id}/media/order`, { ids: items.map((m: any) => m.id) }))) reload();
+    if (await act.run(() => store.reorderMedia(w.id, items.map((m: any) => m.id)))) reload();
   };
   const remove = async (m: any) => {
     if (!(await confirm({ title: 'Delete this photo?', body: 'It is removed from the wedding page for everyone.', ok: 'Delete', danger: true }))) return;
-    if (await act.run(() => api.delete(`/weddings/${w.id}/media/${m.id}`), 'Deleted')) reload();
+    if (await act.run(() => store.removeMedia(w.id, m), 'Deleted')) reload();
   };
 
   return (
@@ -1004,10 +1000,7 @@ function CardSection({ w, editable, setW }: { w: W; editable: boolean; setW: (w:
 
   const upload = async () => {
     if (!pdf) return;
-    const fd = new FormData();
-    fd.append('pdf', pdf);
-    pages.forEach((p) => fd.append('pages', p));
-    const r = await act.run(() => api.upload(`/weddings/${w.id}/card`, fd), 'Card uploaded');
+    const r = await act.run(() => store.setCard(w.id, pdf, pages), 'Card uploaded');
     if (r) {
       setW(r);
       setPdf(null);
@@ -1068,9 +1061,7 @@ function VoiceSection({ w, editable, setW }: { w: W; editable: boolean; setW: (w
   const upload = async (file?: File) => {
     if (!file) return;
     const durationSec = await audioLength(file);
-    const fd = new FormData();
-    fd.append('file', file);
-    const r = await act.run(() => api.upload(`/weddings/${w.id}/voice`, fd, durationSec ? { durationSec } : undefined), 'Voice note uploaded');
+    const r = await act.run(() => store.setVoice(w.id, file, durationSec), 'Voice note uploaded');
     if (r) setW(r);
   };
   return (
@@ -1123,12 +1114,10 @@ const PEOPLE: { id: 'bride' | 'groom' | 'brideFamily' | 'groomFamily'; label: st
 function PeopleSection({ w, editable, setW }: { w: W; editable: boolean; setW: (w: W) => void }) {
   const act = useAction();
   const [busy, setBusy] = useState<string | null>(null);
-  const upload = async (who: string, file?: File) => {
+  const upload = async (who: (typeof PEOPLE)[number]['id'], file?: File) => {
     if (!file) return;
     setBusy(who);
-    const fd = new FormData();
-    fd.append('file', file);
-    const r = await act.run(() => api.upload(`/weddings/${w.id}/photo/${who}`, fd), 'Photo saved');
+    const r = await act.run(() => store.setPersonPhoto(w.id, who, file), 'Photo saved');
     setBusy(null);
     if (r) setW(r);
   };
@@ -1169,7 +1158,7 @@ function AccessTab({ w, editable, setW }: { w: W; editable: boolean; setW: (w: W
 
   const add = async (e: FormEvent) => {
     e.preventDefault();
-    const r = await act.run(() => api.post(`/weddings/${w.id}/access`, { name: v.name.trim(), phone: v.phone.trim(), relation: v.relation.trim() }), `${v.name} can open the console`);
+    const r = await act.run(() => store.addAccess(w.id, { name: v.name.trim(), phone: v.phone.trim(), relation: v.relation.trim() }), `${v.name} can open the console`);
     if (r) {
       setW(r);
       setV({ name: '', phone: '', relation: '' });
@@ -1177,7 +1166,7 @@ function AccessTab({ w, editable, setW }: { w: W; editable: boolean; setW: (w: W
   };
   const remove = async (a: any) => {
     if (!(await confirm({ title: `Remove ${a.name}?`, body: 'They can no longer open this wedding’s console.', ok: 'Remove access', danger: true }))) return;
-    const r = await act.run(() => api.delete(`/weddings/${w.id}/access/${a.id}`), 'Access removed');
+    const r = await act.run(() => store.removeAccess(w.id, a.id), 'Access removed');
     if (r) setW(r);
   };
 

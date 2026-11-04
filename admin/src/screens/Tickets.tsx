@@ -1,7 +1,7 @@
 'use client';
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import { Link, useQueryParam } from '../nav';
-import { api } from '../api';
+import * as store from '../data';
 import { ago, Btn, Empty, ErrorNote, fmtWhen, Loading, PageHead, Pager, Pill, Tabs, useAction, useLoad } from '../ui';
 
 const LIMIT = 50;
@@ -10,7 +10,7 @@ type Status = '' | 'open' | 'answered' | 'closed';
 export function TicketsPage() {
   const [status, setStatus] = useState<Status>('open');
   const [offset, setOffset] = useState(0);
-  const list = useLoad(() => api.get('/tickets', { status, limit: LIMIT, offset }), [status, offset]);
+  const list = useLoad(() => store.tickets({ status, limit: LIMIT, offset }), [status, offset]);
 
   return (
     <>
@@ -79,7 +79,7 @@ export function TicketsPage() {
 
 export function TicketPage() {
   const id = useQueryParam('id');
-  const t = useLoad(() => (id ? api.get(`/tickets/${id}`) : new Promise<never>(() => {})), [id]);
+  const t = useLoad(() => (id ? store.ticket(id) : new Promise<never>(() => {})), [id]);
   const [body, setBody] = useState('');
   const act = useAction();
   const end = useRef<HTMLDivElement>(null);
@@ -91,14 +91,14 @@ export function TicketPage() {
   const reply = async (e: FormEvent) => {
     e.preventDefault();
     if (!body.trim()) return;
-    const r = await act.run(() => api.post(`/tickets/${id}/messages`, { body: body.trim() }), 'Reply sent — they get a notification');
+    const r = await act.run(() => store.replyTicket(id, body.trim()), 'Reply sent — they get a notification');
     if (r) {
       setBody('');
       t.setData(r);
     }
   };
   const setStatus = async (status: string) => {
-    const r = await act.run(() => api.patch(`/tickets/${id}`, { status }), status === 'closed' ? 'Ticket closed' : 'Status changed');
+    const r = await act.run(() => store.setTicketStatus(id, status), status === 'closed' ? 'Ticket closed' : 'Status changed');
     if (r) t.reload();
   };
 

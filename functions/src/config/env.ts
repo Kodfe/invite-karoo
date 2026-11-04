@@ -7,7 +7,7 @@ import { z } from 'zod';
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('production'),
   /** only for running the API outside Cloud Functions (npm run dev) */
-  PORT: z.coerce.number().default(3000),
+  PORT: z.coerce.number().catch(3000),
   PUBLIC_URL: z.string().default('https://api.invitekaroo.com'),
   /** web origins allowed to call the API (the Admin Dashboard) */
   CORS_ORIGINS: z.string().default('https://admin.invitekaroo.com'),

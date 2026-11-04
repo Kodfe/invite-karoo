@@ -6,8 +6,6 @@ export interface AuthBackend {
   onChange(cb: (user: AuthUser | null) => void): () => void;
   signIn(email: string, password: string): Promise<void>;
   signOut(): Promise<void>;
-  /** a fresh ID token for the API; `force` skips the cache */
-  idToken(force?: boolean): Promise<string | null>;
   resetPassword(email: string): Promise<void>;
   changePassword(current: string, next: string): Promise<void>;
 }

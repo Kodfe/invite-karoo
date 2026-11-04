@@ -1,4 +1,3 @@
-import { Injectable } from '@nestjs/common';
 import { col } from '../../db/paths';
 import { byIds, F, getRows, writeAll } from '../../db/store';
 import { NotifAction, User, UserPrefs } from '../../db/models';
@@ -23,7 +22,6 @@ function inQuietHours(p: UserPrefs, now: Date) {
   return qFrom <= qTo ? t >= qFrom && t < qTo : t >= qFrom || t < qTo;
 }
 
-@Injectable()
 export class NotificationsService {
   constructor(private readonly push: PushService) {}
 

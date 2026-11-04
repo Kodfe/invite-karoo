@@ -1,6 +1,7 @@
 'use client';
 import { createContext, ReactNode, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { api, ApiError, Role, setUnauthorizedHandler } from '../api';
+import { ApiError, Role } from '../api';
+import { whoAmI } from '../data';
 import { backend } from './select';
 import { AuthError } from './types';
 
@@ -10,7 +11,7 @@ type State =
   | { phase: 'starting' }
   | { phase: 'signedOut'; notice: string | null }
   | { phase: 'signedIn'; admin: Admin }
-  /** signed in to Firebase but the API could not be reached */
+  /** signed in to Firebase but Firestore could not be reached */
   | { phase: 'stuck'; message: string };
 
 type Auth = {
@@ -37,10 +38,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   /** set while login() runs, so the auth listener doesn't check the account twice */
   const signingIn = useRef(false);
 
-  /** asks the API who this Firebase user is on the team; throws for the login form */
+  /** looks this Firebase user up on the team; throws for the login form */
   const checkTeam = useCallback(async (): Promise<void> => {
     try {
-      const admin = await api.get<Admin>('/me');
+      const admin = await whoAmI();
       setState({ phase: 'signedIn', admin });
     } catch (e) {
       if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
@@ -61,10 +62,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    setUnauthorizedHandler(() => {
-      void backend.signOut().catch(() => {});
-      setState({ phase: 'signedOut', notice: 'Your sign-in ended. Please sign in again.' });
-    });
     return backend.onChange((user) => {
       if (signingIn.current) return;
       if (!user) {

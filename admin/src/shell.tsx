@@ -2,7 +2,8 @@
 import NextLink from 'next/link';
 import { usePathname } from 'next/navigation';
 import { ReactNode, useEffect, useState } from 'react';
-import { api, can } from './api';
+import { can } from './api';
+import * as store from './data';
 import { useAuth } from './auth';
 import { LABELS } from './ui';
 
@@ -19,7 +20,7 @@ export function Shell({ children }: { children: ReactNode }) {
     setOpen(false);
   }, [path]);
   useEffect(() => {
-    api.get<Counts>('/stats').then(setCounts).catch(() => {});
+    store.stats().then(setCounts).catch(() => {});
   }, [path]);
 
   const nav = [

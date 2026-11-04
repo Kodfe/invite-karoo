@@ -1,4 +1,3 @@
-import { Injectable, Logger } from '@nestjs/common';
 import { getMessaging } from 'firebase-admin/messaging';
 import { col, group } from '../../db/paths';
 import { getRows, whereIn, writeAll } from '../../db/store';
@@ -6,9 +5,7 @@ import { firebaseApp } from './firebase';
 
 export type PushPayload = { title: string; body: string; data?: Record<string, string> };
 
-@Injectable()
 export class PushService {
-  private readonly log = new Logger('Push');
   readonly outbox: { userIds: string[]; payload: PushPayload }[] = [];
 
   async toUsers(userIds: string[], payload: PushPayload): Promise<number> {
@@ -42,7 +39,7 @@ export class PushService {
           await writeAll(stale.map((d) => (b) => b.delete(col.devices(String((d as { userId?: string }).userId)).doc(d.id))));
         }
       } catch (e) {
-        this.log.warn(`push failed: ${(e as Error).message}`);
+        console.warn(`push failed: ${(e as Error).message}`);
       }
     }
     return sent;

@@ -7,7 +7,14 @@ import { AuditService } from './audit.service';
 
 @Global()
 @Module({
-  providers: [WhatsappService, PushService, NotificationsService, StorageService, AuditService],
+  providers: [
+    WhatsappService,
+    PushService,
+    // these classes are plain (the team functions use them too), so Nest is told how to build this one
+    { provide: NotificationsService, useFactory: (push: PushService) => new NotificationsService(push), inject: [PushService] },
+    StorageService,
+    AuditService,
+  ],
   exports: [WhatsappService, PushService, NotificationsService, StorageService, AuditService],
 })
 export class InfraModule {}

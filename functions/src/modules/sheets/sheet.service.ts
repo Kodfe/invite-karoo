@@ -1,7 +1,6 @@
-import { Injectable } from '@nestjs/common';
 import ExcelJS from 'exceljs';
 import { XMLParser } from 'fast-xml-parser';
-import { AppError } from '../../common/errors';
+import { AppError } from '../../common/app-error';
 import { toE164 } from '../../common/phone';
 
 export type Grids = Record<string, string[][]>;
@@ -103,7 +102,6 @@ export function parseTime(s: string): string | null {
  * .xlsx, the SpreadsheetML .xls the app hands out, or a plain .csv (guests only).
  * Bad rows are REPORTED, never fatal — 12 broken rows out of 240 must not cost the other 228.
  */
-@Injectable()
 export class SheetService {
   async read(buf: Buffer, filename: string): Promise<Grids> {
     const head = buf.subarray(0, 64).toString('utf8').trimStart();

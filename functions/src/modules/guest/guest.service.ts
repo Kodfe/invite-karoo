@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { col, group } from '../../db/paths';
 import { Access, Fn as FnDoc, Guest, Invite, Media, User, Wedding } from '../../db/models';
+import { couple } from '../../db/rows';
 import { byIds, F, getDoc, getRows } from '../../db/store';
 import { AppError, notFound } from '../../common/errors';
 import { prettyPhone } from '../../common/phone';
@@ -13,7 +14,7 @@ type Row = { inv: Inv; fn: Fn; w: Wed; g: Guest };
 
 const VISIBLE = ['active', 'paused', 'ended'] as const;
 
-export const couple = (w: Pick<Wed, 'bride' | 'groom'>) => `${w.bride.name.split(' ')[0]} & ${w.groom.name.split(' ')[0]}`;
+export { couple };
 
 /**
  * The guest side. Every read goes through two projections:
