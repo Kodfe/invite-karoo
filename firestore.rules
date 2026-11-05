@@ -1,9 +1,9 @@
 rules_version = '2';
 // Who may touch Firestore directly:
 //   the Admin Dashboard  signed in with a Firebase email account that has an active admins/{uid}
-//                        record. It does everything below itself; team accounts and Excel work go
-//                        through callable functions (functions/src/team/callables.ts).
-//   the app              never. It goes through the REST API, whose Admin SDK skips these rules.
+//                        record. It does what is below itself. Team accounts, Excel work and changes
+//                        that have to tell someone go through the API (/v1/team).
+//   the app              never. It goes through the API, whose Admin SDK skips these rules.
 // Anything not matched here is denied: otp, phones, signupTickets, devices, notifications, events…
 //
 // The role comes from the admins record, not the token, so turning an account off works at once.
@@ -48,7 +48,7 @@ service cloud.firestore {
 
     match /admins/{id} {
       allow read: if team();
-      // the record itself is written by the teamMember* functions
+      // the record itself is written by the API
       allow update: if team() && id == me() && changes(['lastLoginAt']);
     }
 
@@ -80,7 +80,7 @@ service cloud.firestore {
       ]);
       allow update: if setup() && validWedding() && changes([
         'ownerPhone', 'contactPhone', 'city', 'timezone', 'startDate', 'endDate', 'datesLocked', 'status', 'statusReason',
-        'sendingEnabled', 'bride', 'groom', 'brideFamily', 'groomFamily', 'card', 'voice', 'handedOverAt', 'endedAt', 'updatedAt',
+        'sendingEnabled', 'bride', 'groom', 'brideFamily', 'groomFamily', 'card', 'voice', 'endedAt', 'updatedAt',
       ]);
 
       match /functions/{f} {
@@ -93,11 +93,8 @@ service cloud.firestore {
           'weddingId', 'name', 'startsAt', 'endsAt', 'venueName', 'venueAddress', 'mapsUrl', 'dressCode', 'notes', 'color',
           'icon', 'giftPlan', 'sort', 'createdAt', 'updatedAt', 'deletedAt',
         ]);
-        // deleting is soft: deletedAt
-        allow update: if setup() && validFunction() && changes([
-          'name', 'startsAt', 'endsAt', 'venueName', 'venueAddress', 'mapsUrl', 'dressCode', 'notes', 'color', 'icon', 'giftPlan',
-          'sort', 'updatedAt', 'deletedAt',
-        ]);
+        // deleting is soft: deletedAt. Other edits go through the API, which tells the guests.
+        allow update: if setup() && changes(['updatedAt', 'deletedAt']);
       }
 
       match /guests/{g} {
@@ -150,13 +147,12 @@ service cloud.firestore {
 
     match /tickets/{t} {
       allow read: if team();
-      allow update: if team() && changes(['status', 'closedAt', 'updatedAt', 'unreadForTeam', 'unreadForUser'])
+      allow update: if team() && changes(['status', 'closedAt', 'updatedAt', 'unreadForTeam'])
         && data().status in ['open', 'answered', 'closed'];
 
+      // replies go through the API, which tells the user
       match /messages/{m} {
         allow read: if team();
-        allow create: if team() && data().ticketId == t && data().author == 'team' && data().adminId == me()
-          && text(data().body, 1, 4000) && fields(['ticketId', 'author', 'adminId', 'body', 'createdAt']);
       }
     }
 

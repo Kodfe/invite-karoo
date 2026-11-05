@@ -93,7 +93,8 @@ class _HostApplyScreenState extends State<HostApplyScreen> {
       _checking = true;
       _report = null;
     });
-    final r = await guard(context, () => Session.read(context).api.upload('/v1/host-applications/check-sheet', files: {'guests': p}));
+    final api = Session.read(context).api;
+    final r = await guard(context, () async => api.post('/v1/host-applications/check-sheet', {'guestsKey': await api.sendFile(p, 'sheet'), 'guestsName': p.split('/').last}));
     if (!mounted) return;
     setState(() {
       _checking = false;
@@ -117,11 +118,12 @@ class _HostApplyScreenState extends State<HostApplyScreen> {
         'endDate': ymd(_end!),
         'datesLocked': true,
       };
-      await Session.read(context).api.upload(
-        '/v1/host-applications',
-        fields: {'data': jsonEncode(data)},
-        files: {if (_sheet != null) 'guests': _sheet!, if (_card != null) 'card': _card!},
-      );
+      final api = Session.read(context).api;
+      await api.post('/v1/host-applications', {
+        'data': jsonEncode(data),
+        if (_sheet != null) ...{'guestsKey': await api.sendFile(_sheet!, 'sheet'), 'guestsName': _sheet!.split('/').last},
+        if (_card != null) ...{'cardKey': await api.sendFile(_card!, 'pdf'), 'cardName': _card!.split('/').last},
+      });
       if (!mounted) return;
       await Session.read(context).refreshMe().catchError((_) {});
       if (!mounted) return;

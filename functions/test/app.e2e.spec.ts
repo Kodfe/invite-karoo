@@ -1,8 +1,10 @@
 import type { Server } from 'node:http';
 import request from 'supertest';
+import { mkdir, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import ExcelJS from 'exceljs';
 import { bearer, boot, idTokenFromCustom, passwordSignIn, signIn } from './setup';
-import { addFunction, createWedding, handover, moveFunction, replyToTicket, teamCall, weddingSummary } from './team';
+import { addFunction, createWedding, importSheet, weddingSummary } from './team';
 import { col } from '../src/db/paths';
 import { getDoc, getRows } from '../src/db/store';
 import { Application, Fn } from '../src/db/models';
@@ -142,7 +144,7 @@ describe('admin builds the wedding', () => {
         ['Reception', day(10).split('-').reverse().join('-'), '7:30 PM', '23:30', 'Vivanta Hall', 'GS Road', 'Formal', 'Dinner from 8:30'],
       ],
     );
-    const upload = (dryRun: boolean) => teamCall<any>('guestsImport', { weddingId, fileName: 'guests.xlsx', file: buf.toString('base64'), dryRun });
+    const upload = (dryRun: boolean) => importSheet(http, adminToken, weddingId, buf, dryRun);
     const dry = await upload(true);
     expect(dry.report.guests).toBe(22);
     expect(dry.report.bad).toBe(3);
@@ -174,7 +176,7 @@ describe('admin builds the wedding', () => {
   it('hands over to the owner', async () => {
     owner = await signIn(app, OWNER, { firstName: 'Mitesh', familyName: 'Ranka', city: 'Guwahati' });
     expect(owner.me?.host?.access ?? 'none').toBe('none');
-    await handover(weddingId);
+    await http.post(`/v1/team/weddings/${weddingId}/handover`).set(bearer(adminToken)).expect(200);
     const me = await http.get('/v1/me').set(bearer(owner.token)).expect(200);
     expect(me.body.host.access).toBe('granted');
     expect(me.body.host.weddings[0]).toMatchObject({ weddingId, role: 'owner', couple: 'Luveena & Mitesh' });
@@ -406,7 +408,7 @@ describe('host console', () => {
 
 describe('changes, reminders and the rest', () => {
   it('tells guests when a function moves', async () => {
-    await moveFunction(weddingId, fn.reception, 30);
+    await http.patch(`/v1/team/weddings/${weddingId}/functions/${fn.reception}`).set(bearer(adminToken)).send({ start: '20:00' }).expect(200);
     const n = await http.get('/v1/notifications').set(bearer(guest.token)).expect(200);
     expect(n.body.items[0].title).toBe('Reception has changed');
   });
@@ -447,8 +449,8 @@ describe('changes, reminders and the rest', () => {
     const bad = await http.post('/v1/host-applications').set(bearer(guest.token)).field('data', JSON.stringify({ brideName: 'R', groomName: 'A', city: 'S', startDate: day(30), endDate: day(1) })).expect(422);
     expect(bad.body.error.fields.endDate).toBeDefined();
 
-    const [app] = await getRows<Application>(col.applications().where('status', '==', 'new'));
-    const made = await teamCall<any>('weddingFromApplication', { applicationId: app.id });
+    const [application] = await getRows<Application>(col.applications().where('status', '==', 'new'));
+    const made = (await http.post(`/v1/team/applications/${application.id}/wedding`).set(bearer(adminToken)).expect(200)).body;
     expect(made.weddingId).toBeTruthy();
     // no Functions sheet → nothing to create Haldi from; the team adds it, then re-imports
     expect(made.import.added).toBe(0);
@@ -475,7 +477,7 @@ describe('changes, reminders and the rest', () => {
   it('support tickets round trip', async () => {
     const t = await http.post('/v1/tickets').set(bearer(guest.token)).send({ subject: 'Cannot see my card', body: 'The card page is empty for me', category: 'invitation' }).expect(201);
     expect(t.body.number).toMatch(/^IK-\d{5}$/);
-    await replyToTicket(t.body.id, 'We have uploaded it again, please check.');
+    await http.post(`/v1/team/tickets/${t.body.id}/messages`).set(bearer(adminToken)).send({ body: 'We have uploaded it again, please check.' }).expect(201);
     const mine = await http.get('/v1/tickets').set(bearer(guest.token)).expect(200);
     expect(mine.body[0]).toMatchObject({ status: 'answered', unread: 1 });
     const one = await http.get(`/v1/tickets/${t.body.id}`).set(bearer(guest.token)).expect(200);
@@ -507,26 +509,64 @@ describe('changes, reminders and the rest', () => {
   });
 
   it('exports the list back out', async () => {
-    const r = await teamCall<{ file: string }>('guestsExport', { weddingId });
+    const r = await http.get(`/v1/team/weddings/${weddingId}/guests/export`).set(bearer(adminToken)).buffer(true).parse((res, cb) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (c: Buffer) => chunks.push(c));
+      res.on('end', () => cb(null, Buffer.concat(chunks)));
+    }).expect(200);
     const wb = new ExcelJS.Workbook();
-    await wb.xlsx.load(Buffer.from(r.file, 'base64') as never);
+    await wb.xlsx.load(r.body);
     expect(wb.getWorksheet('Guests')!.rowCount).toBe(24);
   });
 
-  it('team functions check who is calling', async () => {
-    await expect(teamCall('guestsTemplate', {}, undefined)).rejects.toThrow(/Sign in/);
-    await expect(teamCall('guestsTemplate', {}, 'not-on-the-team')).rejects.toThrow(/not on the Invite Karoo team/);
-    const added = await teamCall<{ id: string }>('teamMemberAdd', { email: 'help@ik.test', name: 'Help Desk', role: 'support', password: 'password-456' });
-    await expect(teamCall('guestsExport', { weddingId }, added.id)).resolves.toBeTruthy();
-    await expect(teamCall('guestsImport', { weddingId, fileName: 'g.xlsx', file: 'AA==' }, added.id)).rejects.toThrow(/do not have access/);
-    await expect(teamCall('teamMemberAdd', { email: 'x@ik.test', name: 'Xavier', role: 'admin', password: 'password-789' }, added.id)).rejects.toThrow(/do not have access/);
-    await teamCall('teamMemberEdit', { id: added.id, active: false });
-    await expect(teamCall('guestsExport', { weddingId }, added.id)).rejects.toThrow(/not on the Invite Karoo team/);
+  it('team routes check who is calling', async () => {
+    const template = '/v1/team/guest-template';
+    await http.get(template).expect(401);
+    const appUser = await signIn(app, '9810000601');
+    const outsider = await http.get(template).set(bearer(appUser.token)).expect(403);
+    expect(outsider.body.error.code).toBe('NOT_TEAM');
+    const added = await http.post('/v1/team/members').set(bearer(adminToken)).send({ email: 'help@ik.test', name: 'Help Desk', role: 'support', password: 'password-456' }).expect(201);
+    const support = await passwordSignIn('help@ik.test', 'password-456');
+    await http.get(`/v1/team/weddings/${weddingId}/guests/export`).set(bearer(support)).expect(200);
+    await http.post(`/v1/team/weddings/${weddingId}/handover`).set(bearer(support)).expect(403);
+    await http.post('/v1/team/members').set(bearer(support)).send({ email: 'x@ik.test', name: 'Xavier', role: 'admin', password: 'password-789' }).expect(403);
+    await http.patch(`/v1/team/members/${added.body.id}`).set(bearer(adminToken)).send({ active: false }).expect(200);
+    await http.get(template).set(bearer(support)).expect(401);
     await expect(passwordSignIn('help@ik.test', 'password-456')).rejects.toThrow();
   });
 
   it('an admin cannot lock themselves out', async () => {
     const me = (await getRows<{ email: string }>(col.admins())).find((a) => a.email === 'a@ik.test')!;
-    await expect(teamCall('teamMemberEdit', { id: me.id, active: false }, me.id)).rejects.toThrow(/cannot switch off/);
+    const r = await http.patch(`/v1/team/members/${me.id}`).set(bearer(adminToken)).send({ active: false }).expect(409);
+    expect(r.body.error.code).toBe('SELF_LOCKOUT');
+  });
+
+  it('answers the dashboard only from its own origin', async () => {
+    const yes = await http.options('/v1/team/guest-template').set('Origin', 'https://invite-karoo.vercel.app').expect(204);
+    expect(yes.headers['access-control-allow-origin']).toBe('https://invite-karoo.vercel.app');
+    const no = await http.options('/v1/team/guest-template').set('Origin', 'https://evil.example').expect(204);
+    expect(no.headers['access-control-allow-origin']).toBeUndefined();
+  });
+
+  it('runs the minute job only for Vercel Cron', async () => {
+    await http.get('/v1/cron/minute').expect(401);
+    await http.get('/v1/cron/minute').set(bearer('wrong')).expect(401);
+    const r = await http.get('/v1/cron/minute').set(bearer('test-cron-secret')).expect(200);
+    expect(r.body.ok).toBe(true);
+  });
+
+  it('takes large files through Storage, each user only their own', async () => {
+    await http.post('/v1/uploads').set(bearer(owner.token)).send({ kind: 'pdf', name: 'x.exe', contentType: 'application/x-msdownload', size: 10 }).expect(415);
+    await http.post('/v1/uploads').set(bearer(owner.token)).send({ kind: 'pdf', name: 'x.pdf', contentType: 'application/pdf', size: 99 * 1024 * 1024 }).expect(413);
+    const u = await http.post('/v1/uploads').set(bearer(owner.token)).send({ kind: 'sheet', name: 'g.xlsx', contentType: 'application/octet-stream', size: 100 }).expect(201);
+    const buf = await sheet([['Guest Name', 'Mobile', 'Side', 'Relation', 'Expected Pax', 'Notes', 'Haldi'], ['A', '9876543211', 'Bride', 'Bua', 1, '', 'Y']]);
+    const full = path.resolve(process.env.UPLOAD_DIR!, u.body.key);
+    await mkdir(path.dirname(full), { recursive: true });
+    await writeFile(full, buf);
+    await http.post('/v1/host-applications/check-sheet').set(bearer(cohost.token)).send({ guestsKey: u.body.key, guestsName: 'g.xlsx' }).expect(403);
+    const ok = await http.post('/v1/host-applications/check-sheet').set(bearer(owner.token)).send({ guestsKey: u.body.key, guestsName: 'g.xlsx' }).expect(201);
+    expect(ok.body.report.guests).toBe(1);
+    // it is used up
+    await http.post('/v1/host-applications/check-sheet').set(bearer(owner.token)).send({ guestsKey: u.body.key, guestsName: 'g.xlsx' }).expect(422);
   });
 });

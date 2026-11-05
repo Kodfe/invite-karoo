@@ -7,6 +7,7 @@ import { Application, User } from '../../db/models';
 import { F, getDoc, getRows } from '../../db/store';
 import { routes } from '../../common/http';
 import { svc } from '../../services';
+import { takeUpload } from '../files/files.routes';
 
 const AppData = z
   .object({
@@ -51,7 +52,7 @@ export function applicationRoutes() {
 
   /** check a filled sheet before submitting — returns the same report the team will see */
   r.post('check-sheet', async (c) => {
-    const f = c.file('guests');
+    const f = await takeUpload(c, 'guests');
     if (!f) throw new AppError('NO_FILE', 'Choose the guest list file first');
     svc.storage.check('sheet', f);
     const parsed = svc.sheets.parse(await svc.sheets.read(f.buffer, f.originalname));
@@ -76,7 +77,7 @@ export function applicationRoutes() {
 
     let guestFile = null;
     let guestReport = null;
-    const g = c.file('guests');
+    const g = await takeUpload(c, 'guests');
     if (g) {
       svc.storage.check('sheet', g);
       guestReport = svc.sheets.parse(await svc.sheets.read(g.buffer, g.originalname)).report;
@@ -84,7 +85,7 @@ export function applicationRoutes() {
       guestFile = { key: s.key, name: s.name, size: s.size };
     }
     let cardFile = null;
-    const card = c.file('card');
+    const card = await takeUpload(c, 'card');
     if (card) {
       svc.storage.check('pdf', card);
       const s = await svc.storage.put(`applications/${c.uid}`, card);

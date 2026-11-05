@@ -7,6 +7,7 @@ import { PersonalEvent } from '../../db/models';
 import { F, getDoc, getRows } from '../../db/store';
 import { routes } from '../../common/http';
 import { svc } from '../../services';
+import { takeUpload } from '../files/files.routes';
 
 const TYPES = ['Appointment', 'Personal', 'Meeting', 'Celebration', 'Wedding', 'Birthday', 'Other'] as const;
 const OwnFn = z.object({
@@ -119,7 +120,7 @@ export function eventRoutes() {
 
   /** read an invitation card with AI. Nothing is saved until the guest checks it and POSTs /events. */
   r.post('scan', async (c) => {
-    const file = c.file();
+    const file = await takeUpload(c, 'file');
     if (!file) throw new AppError('NO_FILE', 'Take or choose a photo of the card first');
     if (file.size > 10 * 1024 * 1024) throw new AppError('FILE_TOO_LARGE', 'The photo is too large (max 10 MB)', 413);
     try {

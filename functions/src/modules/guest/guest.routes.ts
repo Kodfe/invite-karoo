@@ -28,10 +28,10 @@ export function guestRoutes() {
 
   r.get('weddings/:wid', (c) => svc.guest.wedding(c.uid, c.id('wid')));
 
-  r.get('weddings/:wid/card.pdf', async (c) => {
+  /** a short-lived link: a card can be larger than a Vercel response may be */
+  r.get('weddings/:wid/card-url', async (c) => {
     const card = await svc.guest.cardKey(c.uid, c.id('wid'));
-    const buf = await svc.storage.read(card.key);
-    c.send(buf, 'application/pdf', `inline; filename="${card.name.replace(/"/g, '')}"`);
+    return { url: await svc.storage.downloadUrl(card.key), name: card.name };
   });
 
   r.get('weddings/:wid/qr', (c) => svc.guest.qr(c.uid, c.id('wid')));

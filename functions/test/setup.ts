@@ -11,6 +11,7 @@ export function testEnv() {
     NODE_ENV: 'test',
     DEV_OTP: '1234',
     OTP_SECRET: 'test-otp-secret',
+    CRON_SECRET: 'test-cron-secret',
     WHATSAPP_PROVIDER: 'console',
     STORAGE_DRIVER: 'local',
     UPLOAD_DIR: '/tmp/ik-test-uploads',

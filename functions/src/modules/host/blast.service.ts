@@ -1,3 +1,4 @@
+import { later } from '../../common/background';
 import { env } from '../../config/env';
 import { AppError, conflict, notFound } from '../../common/app-error';
 import { clock12, dayLabel, fnPast } from '../../common/time';
@@ -114,8 +115,9 @@ export class BlastService {
         });
       }
     });
-    // in production a Firestore trigger on the blast sends it; tests send right away
+    // sent after answering; the cron sweep picks up one that stops partway. Tests send right away.
     if (env().NODE_ENV === 'test') await this.process(ctx.w.id, ref.id);
+    else later(this.process(ctx.w.id, ref.id));
     return this.view((await getDoc<Blast>(ref))!);
   }
 

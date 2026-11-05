@@ -43,7 +43,9 @@ class _AiScanScreenState extends State<AiScanScreen> {
       _state = 'scanning';
     });
     try {
-      final r = asJson(await Session.read(context).api.upload('/v1/events/scan', files: {'file': path}));
+      final api = Session.read(context).api;
+      final key = await api.sendFile(path, path.toLowerCase().endsWith('.pdf') ? 'pdf' : 'image');
+      final r = asJson(await api.post('/v1/events/scan', {'fileKey': key, 'fileName': path.split('/').last}));
       if (!mounted) return;
       setState(() {
         _result = r;

@@ -1,14 +1,17 @@
 import { z } from 'zod';
 
 /**
- * Settings. On Firebase, plain values come from `functions/.env` (deployed with the code) and
- * secrets from Secret Manager (`firebase functions:secrets:set NAME`); both arrive as process.env.
+ * Settings: the Vercel project's Environment Variables, or functions/.env locally.
  */
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('production'),
-  /** only for running the API outside Cloud Functions (npm run dev) */
+  /** only for running the API locally (npm run dev) */
   PORT: z.coerce.number().catch(3000),
   PUBLIC_URL: z.string().default('https://api.invitekaroo.com'),
+  /** web origins allowed to call /v1/team: the Admin Dashboard */
+  CORS_ORIGINS: z.string().default('https://admin.invitekaroo.com,https://invite-karoo.vercel.app'),
+  /** Vercel Cron sends this as a bearer token. Without it /v1/cron answers nobody. */
+  CRON_SECRET: z.string().default(''),
 
   /** secret: salts the OTP code hashes */
   OTP_SECRET: z.string().default('dev-otp-secret'),
@@ -24,12 +27,12 @@ const schema = z.object({
   WA_TEMPLATE_REMINDER: z.string().default('ik_function_reminder'),
   WA_TEMPLATE_LANG: z.string().default('en'),
 
-  /** only needed outside Google Cloud (local dev against a real project) */
+  /** the Firebase project's service account: how the API reaches Firestore, Auth, Storage and FCM */
   FIREBASE_SERVICE_ACCOUNT_JSON: z.string().default(''),
-  /** optional: Firebase reserves the FIREBASE_ prefix in functions/.env, hence the name */
+  /** optional: defaults to {project}.firebasestorage.app */
   STORAGE_BUCKET: z.string().default(''),
 
-  /** firebase = Cloud Storage (production); local = ./uploads served at /files (development, tests) */
+  /** firebase = Firebase Storage (production); local = ./uploads served at /files (development, tests) */
   STORAGE_DRIVER: z.enum(['local', 'firebase']).default('firebase'),
   UPLOAD_DIR: z.string().default('./uploads'),
 

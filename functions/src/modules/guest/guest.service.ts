@@ -233,7 +233,7 @@ export class GuestService {
       cover: m('cover'),
       coupleGallery: m('couple'),
       familyGallery: m('family'),
-      card: w.card ? { name: w.card.name, sizeMb: Math.round((w.card.size / 1048576) * 10) / 10, pages: w.card.pages, pdfUrl: w.card.key ? `/v1/weddings/${w.id}/card.pdf` : null } : null,
+      card: w.card ? { name: w.card.name, sizeMb: Math.round((w.card.size / 1048576) * 10) / 10, pages: w.card.pages, pdfUrl: w.card.key ? `/v1/weddings/${w.id}/card-url` : null } : null,
       voice: w.voice ? { url: w.voice.url, durationSec: w.voice.durationSec ?? null } : null,
       // the ONE number guests are given. Host phones are never projected to the guest side.
       contact: w.contactPhone ? { phone: w.contactPhone, phonePretty: prettyPhone(w.contactPhone) } : null,

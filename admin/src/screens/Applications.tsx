@@ -91,7 +91,7 @@ export function ApplicationPage() {
   const nav = useNavigate();
   const confirm = useConfirm();
   const app = useLoad(() => (id ? store.application(id) : new Promise<never>(() => {})), [id]);
-  const team = useLoad(() => (can(admin?.role, 'admin') ? store.team() : Promise.resolve([] as any[])), [admin?.role]);
+  const team = useLoad(() => (can(admin?.role, 'admin') ? store.teamMembers() : Promise.resolve([] as any[])), [admin?.role]);
   const [notes, setNotes] = useState('');
   const [created, setCreated] = useState<any>(null);
   const act = useAction();

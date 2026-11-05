@@ -1,8 +1,7 @@
 /*
  * Everything the dashboard reads and writes. The browser goes straight to Firestore and Storage,
- * and firestore.rules + storage.rules decide what it may do. Team accounts and Excel work are
- * callable functions (functions/src/team/callables.ts). Notifications follow from the writes, in
- * Firestore triggers (functions/src/team/notify.ts).
+ * and firestore.rules + storage.rules decide what it may do. Team accounts, Excel work and changes
+ * that have to tell someone go through the API (/v1/team, functions/src/team/team.routes.ts).
  */
 import { getAuth } from 'firebase/auth';
 import { FirebaseError } from 'firebase/app';
@@ -16,7 +15,6 @@ import {
   getCountFromServer,
   getDoc,
   getDocs,
-  increment,
   Query,
   query,
   QueryDocumentSnapshot,
@@ -28,7 +26,6 @@ import {
   WriteBatch,
   writeBatch,
 } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
 import { deleteObject, getDownloadURL, ref as fileRef, uploadBytes } from 'firebase/storage';
 import { ApiError, Json, Role } from './api';
 import { firebase } from './firebase';
@@ -56,10 +53,7 @@ const SAYS: Record<string, [string, string, number]> = {
 
 function friendly(e: unknown): unknown {
   if (!(e instanceof FirebaseError)) return e;
-  // a callable's own error: see call() in functions/src/team/callables.ts
-  const details = (e as FirebaseError & { details?: { code?: string; status?: number; fields?: Record<string, string> } }).details;
-  if (details?.code) return new ApiError(details.code, e.message, details.status ?? 400, details.fields);
-  const known = SAYS[e.code] ?? SAYS[e.code.replace(/^(firestore|functions)\//, '')];
+  const known = SAYS[e.code] ?? SAYS[e.code.replace(/^firestore\//, '')];
   return known ? new ApiError(known[0], known[1], known[2]) : e;
 }
 
@@ -119,15 +113,33 @@ async function wedding(id: string) {
   return w;
 }
 
-/* ───────── callables ───────── */
+/* ───────── the API ───────── */
 
-async function call<T = any>(name: string, body: Json = {}): Promise<T> {
-  return (await httpsCallable<Json, T>(firebase().functions, name)(body)).data;
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.invitekaroo.com').replace(/\/$/, '');
+
+async function team(method: string, path: string, body?: Json): Promise<Response> {
+  const token = await getAuth(firebase().app).currentUser?.getIdToken();
+  if (!token) throw new ApiError('UNAUTHORIZED', 'Sign in to continue', 401);
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}/v1/team${path}`, {
+      method,
+      headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    throw new ApiError('NETWORK', 'Could not reach the server. Check your connection and try again.', 0);
+  }
+  if (res.ok) return res;
+  const err = ((await res.json().catch(() => ({}))) as { error?: { code?: string; message?: string; fields?: Record<string, string> } }).error;
+  throw new ApiError(err?.code ?? `HTTP_${res.status}`, err?.message ?? `Request failed (${res.status})`, res.status, err?.fields);
 }
+const teamJson = async <T = any,>(method: string, path: string, body?: Json): Promise<T> => (await (await team(method, path, body)).json()) as T;
 
-function saveFile(name: string, base64: string) {
-  const bytes = Uint8Array.from(atob(base64), (x) => x.charCodeAt(0));
-  const href = URL.createObjectURL(new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+async function saveDownload(path: string, fallbackName: string) {
+  const res = await team('GET', path);
+  const name = /filename="?([^";]+)"?/.exec(res.headers.get('Content-Disposition') ?? '')?.[1] ?? fallbackName;
+  const href = URL.createObjectURL(await res.blob());
   const a = document.createElement('a');
   a.href = href;
   a.download = name;
@@ -136,14 +148,6 @@ function saveFile(name: string, base64: string) {
   a.remove();
   setTimeout(() => URL.revokeObjectURL(href), 10_000);
 }
-
-const toBase64 = (file: File) =>
-  new Promise<string>((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(String(r.result).split(',')[1] ?? '');
-    r.onerror = () => reject(new ApiError('BAD_FILE', 'Could not read that file'));
-    r.readAsDataURL(file);
-  });
 
 /* ───────── files ───────── */
 
@@ -176,9 +180,9 @@ export const whoAmI = safe(async () => {
   return { id: me.id, email: me.email as string, name: me.name as string, role: me.role as Role };
 });
 
-export const team = safe(async () => (await rows(c('admins'))).sort((a, b) => a.name.localeCompare(b.name)));
-export const addMember = safe((b: Json) => call('teamMemberAdd', b));
-export const editMember = safe((id: string, b: Json) => call('teamMemberEdit', { id, ...b }));
+export const teamMembers = safe(async () => (await rows(c('admins'))).sort((a, b) => a.name.localeCompare(b.name)));
+export const addMember = safe((b: Json) => teamJson('POST', '/members', b));
+export const editMember = safe((id: string, b: Json) => teamJson('PATCH', `/members/${id}`, b));
 
 /* ───────── dashboard ───────── */
 
@@ -234,7 +238,7 @@ export const patchApplication = safe(async (id: string, b: Json) => {
 });
 
 /** turns an application into a draft wedding, importing its sheet if it came with one */
-export const weddingFromApplication = safe((id: string) => call('weddingFromApplication', { applicationId: id }));
+export const weddingFromApplication = safe((id: string) => teamJson('POST', `/applications/${id}/wedding`));
 
 /* ───────── weddings ───────── */
 
@@ -366,18 +370,7 @@ export const updateWedding = safe(async (id: string, patch: Json) => {
 
 /** opens the console on the owner's number and makes the wedding visible to guests */
 export const handover = safe(async (id: string) => {
-  const w = await wedding(id);
-  const fnCount = await count(query(c(`weddings/${id}/functions`), where('deletedAt', '==', null)));
-  const guestCount = await count(query(c(`weddings/${id}/guests`), where('active', '==', true)));
-  if (!fnCount) throw new ApiError('NO_FUNCTIONS', 'Add at least one function before handing over', 409);
-  if (!guestCount) throw new ApiError('NO_GUESTS', 'Import the guest list before handing over', 409);
-  const batch = writeBatch(db());
-  batch.update(d(`weddings/${id}`), { status: 'active', ...(w.handedOverAt ? {} : { handedOverAt: now() }), updatedAt: now() });
-  if (w.applicationId && (await getDoc(d(`applications/${w.applicationId}`))).exists()) {
-    batch.update(d(`applications/${w.applicationId}`), { status: 'live', updatedAt: now() });
-  }
-  audit(batch, 'wedding.handover', id);
-  await batch.commit();
+  await teamJson('POST', `/weddings/${id}/handover`);
   return getWedding(id);
 });
 
@@ -396,32 +389,8 @@ export const addFunction = safe(async (weddingId: string, f: FunctionInput) => {
   return { id: ref.id };
 });
 
-export const updateFunction = safe(async (weddingId: string, fnId: string, f: Partial<FunctionInput>) => {
-  const w = await wedding(weddingId);
-  const cur = await one(`weddings/${weddingId}/functions/${fnId}`);
-  if (!cur || cur.deletedAt) throw notFound('Function');
-  const lp = localParts(new Date(cur.startsAt), w.timezone);
-  const vals = fnValues(w as never, {
-    name: f.name ?? cur.name,
-    date: f.date ?? lp.date,
-    start: f.start ?? lp.time,
-    end: f.end !== undefined ? f.end : cur.endsAt ? localParts(new Date(cur.endsAt), w.timezone).time : null,
-    venueName: f.venueName ?? cur.venueName,
-    venueAddress: f.venueAddress !== undefined ? f.venueAddress : cur.venueAddress,
-    mapsUrl: f.mapsUrl !== undefined ? f.mapsUrl : cur.mapsUrl,
-    dressCode: f.dressCode !== undefined ? f.dressCode : cur.dressCode,
-    notes: f.notes !== undefined ? f.notes : cur.notes,
-    color: f.color ?? cur.color,
-    icon: f.icon ?? cur.icon,
-    giftPlan: f.giftPlan !== undefined ? f.giftPlan : cur.giftPlan,
-    sort: f.sort ?? cur.sort,
-  });
-  const batch = writeBatch(db());
-  batch.update(d(`weddings/${weddingId}/functions/${fnId}`), { ...vals, updatedAt: now() });
-  audit(batch, 'function.update', weddingId, { functionId: fnId, moved: vals.startsAt.getTime() !== new Date(cur.startsAt).getTime() });
-  await batch.commit();
-  return { id: fnId };
-});
+/** on the server, which tells the guests of a live wedding */
+export const updateFunction = safe((weddingId: string, fnId: string, f: Partial<FunctionInput>) => teamJson('PATCH', `/weddings/${weddingId}/functions/${fnId}`, f));
 
 export const deleteFunction = safe(async (weddingId: string, fnId: string) => {
   const batch = writeBatch(db());
@@ -497,20 +466,21 @@ export const setGuestActive = safe(async (weddingId: string, guestId: string, ac
   return { ok: true };
 });
 
+/** The workbook goes through Storage: the API can take at most 4.5 MB in a request. */
 export const importGuests = safe(async (weddingId: string, file: File, opts: { mode: string; dryRun: boolean; createFunctions: boolean }) => {
   if (file.size > 10 * 1024 * 1024) throw new ApiError('FILE_TOO_LARGE', 'Files here can be at most 10 MB', 413);
-  return call('guestsImport', { weddingId, fileName: file.name, file: await toBase64(file), ...opts });
+  const fileKey = `imports/${uid()}/${crypto.randomUUID()}`;
+  await uploadBytes(fileRef(firebase().storage, fileKey), file);
+  return teamJson('POST', `/weddings/${weddingId}/guests/import`, { fileKey, fileName: file.name, ...opts });
 });
 
 export const exportGuests = safe(async (weddingId: string) => {
-  const r = await call<{ name: string; file: string }>('guestsExport', { weddingId });
-  saveFile(r.name, r.file);
+  await saveDownload(`/weddings/${weddingId}/guests/export`, 'guests.xlsx');
   return true;
 });
 
 export const guestTemplate = safe(async () => {
-  const r = await call<{ name: string; file: string }>('guestsTemplate');
-  saveFile(r.name, r.file);
+  await saveDownload('/guest-template', 'invite-karoo-guest-list.xlsx');
   return true;
 });
 
@@ -639,11 +609,9 @@ export const ticket = safe(async (id: string): Promise<Json> => {
   };
 });
 
+/** on the server, which tells the user */
 export const replyTicket = safe(async (id: string, body: string) => {
-  const batch = writeBatch(db());
-  batch.set(doc(c(`tickets/${id}/messages`)), { ticketId: id, author: 'team', adminId: uid(), body, createdAt: now() });
-  batch.update(d(`tickets/${id}`), { status: 'answered', unreadForUser: increment(1), updatedAt: now() });
-  await batch.commit();
+  await teamJson('POST', `/tickets/${id}/messages`, { body });
   return ticket(id);
 });
 

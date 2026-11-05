@@ -1,7 +1,7 @@
 /**
  * The little the REST API needs from a web server: a route table, sign-in, rate limits, request
- * bodies and one error shape. No framework. It runs inside a Firebase `onRequest` function, which
- * has already read the request (req.rawBody), and under plain node:http locally and in tests.
+ * bodies and one error shape. No framework: it runs as a Vercel Function (api/index.ts), and under
+ * plain node:http locally and in tests.
  *
  * Every error has the same shape:
  *   { error: { code: 'RSVP_CLOSED', message: 'Replies for this function closed ...', fields?: {...} } }
@@ -14,18 +14,20 @@ import helmet from 'helmet';
 import type { ZodType, z } from 'zod';
 import { env } from '../config/env';
 import { AppError, notFound } from './app-error';
-import { signedInUser, UserClaims } from './auth';
+import type { AdminRole } from '../db/models';
+import { signedInUser, teamMember, UserClaims } from './auth';
 import { ID_RE, parse } from './zod';
 
 export type Upload = { fieldname: string; originalname: string; mimetype: string; size: number; buffer: Buffer };
-type Req = IncomingMessage & { rawBody?: Buffer };
+type Req = IncomingMessage;
 type Handler = (c: Call) => unknown;
 /**
  *   status   what a success answers: POST is 201 and everything else 200, unless set here
  *   files    multipart field names this route accepts
  *   limit    requests a minute from one address, on top of the overall limit
+ *   team     a team route, for these roles (admin is always allowed)
  */
-type Options = { status?: number; files?: string[]; limit?: number };
+type Options = { status?: number; files?: string[]; limit?: number; team?: AdminRole[] };
 type Route = { method: string; pattern: RegExp; keys: string[]; signedIn: boolean; handler: Handler; opts: Options };
 
 /** what a route handler works with */
@@ -39,6 +41,7 @@ export class Call {
     readonly res: ServerResponse,
     readonly params: Record<string, string>,
     readonly search: URLSearchParams,
+    readonly authorization: string | undefined,
   ) {}
 
   get uid() {
@@ -108,7 +111,6 @@ export const perMinute = (n: number) => (process.env.NODE_ENV === 'test' ? 100_0
 /* ───────────── request bodies ───────────── */
 
 async function bodyOf(req: Req) {
-  if (req.rawBody) return req.rawBody;
   const chunks: Buffer[] = [];
   for await (const chunk of req) chunks.push(chunk as Buffer);
   return Buffer.concat(chunks);
@@ -140,8 +142,8 @@ function readMultipart(req: Req, raw: Buffer, c: Call, allowed: string[]) {
 
 async function readBody(req: Req, c: Call, route: Route) {
   const raw = await bodyOf(req);
-  if (route.opts.files) {
-    if (/^multipart\//i.test(req.headers['content-type'] ?? '')) await readMultipart(req, raw, c, route.opts.files);
+  if (route.opts.files && /^multipart\//i.test(req.headers['content-type'] ?? '')) {
+    await readMultipart(req, raw, c, route.opts.files);
     c.json = c.fields;
     return;
   }
@@ -170,6 +172,18 @@ function fail(res: ServerResponse, e: unknown) {
   answer(res, 500, { error: { code: 'INTERNAL', message: 'Something went wrong on our side. Please try again.' } });
 }
 
+/** the dashboard is on another origin; only team routes answer it */
+function allowDashboard(req: Req, res: ServerResponse) {
+  const origin = req.headers.origin;
+  if (!origin || !env().CORS_ORIGINS.split(',').map((s) => s.trim()).includes(origin)) return;
+  res.setHeader('Access-Control-Allow-Origin', origin);
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH');
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+  res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+  res.setHeader('Access-Control-Max-Age', '3600');
+}
+
 /** STORAGE_DRIVER=local only: uploads served from disk during development */
 async function localFile(pathname: string, res: ServerResponse) {
   const root = path.resolve(env().UPLOAD_DIR);
@@ -185,6 +199,10 @@ export async function handle(req: Req, res: ServerResponse) {
   try {
     await new Promise<void>((resolve, reject) => headers(req, res, (e?: unknown) => (e ? reject(e) : resolve())));
     const url = new URL(req.url ?? '/', 'http://api');
+    if (url.pathname.startsWith('/v1/team/')) {
+      allowDashboard(req, res);
+      if (req.method === 'OPTIONS') return answer(res, 204, undefined);
+    }
     const caller = callerOf(req);
     checkLimit(caller, perMinute(300));
     if (req.method === 'GET' && url.pathname.startsWith('/files/') && env().STORAGE_DRIVER === 'local') return await localFile(url.pathname, res);
@@ -194,9 +212,10 @@ export async function handle(req: Req, res: ServerResponse) {
       const m = route.pattern.exec(url.pathname);
       if (!m) continue;
       const params = Object.fromEntries(route.keys.map((k, i) => [k, decodeURIComponent(m[i + 1])]));
-      const c = new Call(res, params, url.searchParams);
+      const c = new Call(res, params, url.searchParams, req.headers.authorization);
       if (route.opts.limit) checkLimit(`${caller} ${route.method} ${route.pattern}`, route.opts.limit);
-      if (route.signedIn) c.user = await signedInUser(req.headers.authorization);
+      if (route.opts.team) c.user = await teamMember(req.headers.authorization, route.opts.team);
+      else if (route.signedIn) c.user = await signedInUser(req.headers.authorization);
       await readBody(req, c, route);
       const out = await route.handler(c);
       if (!res.writableEnded) answer(res, route.opts.status ?? (req.method === 'POST' ? 201 : 200), out);
