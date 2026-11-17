@@ -1,14 +1,12 @@
-import { Controller, Get } from '@nestjs/common';
-import { ApiTags } from '@nestjs/swagger';
 import { env } from '../../config/env';
 import { RSVP_LEAD_MS } from '../../common/time';
+import { routes } from '../../common/http';
 
 /** public settings the app reads on launch — nothing secret here */
-@ApiTags('config')
-@Controller('v1/config')
-export class ConfigController {
-  @Get()
-  get() {
+export function configRoutes() {
+  const r = routes('/v1/config', { signedIn: false });
+
+  r.get('', () => {
     return {
       minAppVersion: '1.0.0',
       teamWhatsapp: env().TEAM_WHATSAPP,
@@ -29,10 +27,7 @@ export class ConfigController {
         { cc: '+61', flag: '🇦🇺', len: 9 },
       ],
     };
-  }
+  });
 
-  @Get('health')
-  health() {
-    return { ok: true, time: new Date().toISOString() };
-  }
+  r.get('health', () => ({ ok: true, time: new Date().toISOString() }));
 }

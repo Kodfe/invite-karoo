@@ -59,6 +59,33 @@ export class StorageService {
     return { key, url: `${e.PUBLIC_URL}/files/${key}`, name: file.originalname, size: file.size, contentType: file.mimetype };
   }
 
+  private bucket() {
+    const app = firebaseApp();
+    if (!app) throw new AppError('STORAGE_NOT_CONFIGURED', 'File storage is not configured', 500);
+    return getStorage(app).bucket();
+  }
+
+  /** a link the app can PUT one file to, for files too large to pass through the API */
+  async uploadUrl(key: string, contentType: string, kind: keyof typeof ALLOWED) {
+    if (env().STORAGE_DRIVER !== 'firebase') return { url: `${env().PUBLIC_URL}/files/${key}`, headers: { 'Content-Type': contentType } };
+    const range = `0,${LIMIT_MB[kind] * 1024 * 1024}`;
+    const [url] = await this.bucket().file(key).getSignedUrl({
+      version: 'v4',
+      action: 'write',
+      expires: Date.now() + 15 * 60_000,
+      contentType,
+      extensionHeaders: { 'x-goog-content-length-range': range },
+    });
+    return { url, headers: { 'Content-Type': contentType, 'x-goog-content-length-range': range } };
+  }
+
+  /** a link to fetch one file for ten minutes */
+  async downloadUrl(key: string) {
+    if (env().STORAGE_DRIVER !== 'firebase') return `${env().PUBLIC_URL}/files/${key}`;
+    const [url] = await this.bucket().file(key).getSignedUrl({ version: 'v4', action: 'read', expires: Date.now() + 10 * 60_000 });
+    return url;
+  }
+
   async read(key: string): Promise<Buffer> {
     if (env().STORAGE_DRIVER === 'firebase') {
       const app = firebaseApp();

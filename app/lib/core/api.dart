@@ -109,7 +109,38 @@ class Api {
     return _decode(res);
   }
 
-  /// raw bytes (card PDF, spreadsheet template)
+  /// Large files go straight to Storage, because the API takes at most 4.5 MB in a request: a link
+  /// from /v1/uploads, then a PUT. Returns the key to hand to the route that wants the file.
+  Future<String> sendFile(String path, String kind) async {
+    if (Demo.on) throw ApiException('DEMO', 'Uploads are not part of the demo.');
+    final file = File(path);
+    final link = asJson(await post('/v1/uploads', {
+      'kind': kind,
+      'name': path.split('/').last,
+      'contentType': _mime(path)?.mimeType ?? 'application/octet-stream',
+      'size': await file.length(),
+    }));
+    final headers = asJson(link['headers']).map((k, v) => MapEntry(k, '$v'));
+    http.Response res;
+    try {
+      res = await _client.put(Uri.parse('${link['url']}'), headers: headers, body: await file.readAsBytes()).timeout(const Duration(minutes: 3));
+    } on TimeoutException {
+      throw ApiException('NETWORK', 'The upload took too long. Please try again.');
+    } on SocketException {
+      throw ApiException('NETWORK', 'No internet connection. Check your network and try again.');
+    }
+    if (res.statusCode >= 300) throw ApiException('UPLOAD_FAILED', 'The upload did not go through. Please try again.', status: res.statusCode);
+    return '${link['key']}';
+  }
+
+  /// a file from a short-lived link the API handed out
+  Future<List<int>> fetch(String url) async {
+    final res = await _client.get(Uri.parse(url)).timeout(const Duration(minutes: 2));
+    if (res.statusCode >= 300) throw ApiException('DOWNLOAD_FAILED', 'The file could not be fetched. Please try again.', status: res.statusCode);
+    return res.bodyBytes;
+  }
+
+  /// raw bytes (spreadsheet template)
   Future<List<int>> bytes(String path) async {
     if (Demo.on) throw ApiException('DEMO', 'Downloads are not part of the demo.');
     Future<http.Response> go(bool fresh) async {

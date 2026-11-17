@@ -1,5 +1,5 @@
 rules_version = '2';
-// The Admin Dashboard uploads wedding files directly; the app's files go through the REST API.
+// The Admin Dashboard uploads wedding files directly. The app uses signed links from the API.
 // Guests see files through the download-token links stored in Firestore, which skip these rules.
 // The role here is the token's ikRole claim: a switched-off account's token keeps working for
 // Storage until it expires (at most an hour), though it can no longer be refreshed.
@@ -29,6 +29,10 @@ service firebase.storage {
 
     match /{allPaths=**} {
       allow read: if team();
+    }
+    // a guest sheet on its way to the API, which reads and removes it
+    match /imports/{uid}/{file} {
+      allow create: if setup() && uid == request.auth.uid && mb(10);
     }
     match /weddings/{w}/cover/{file} {
       allow create: if setup() && (image() || video());

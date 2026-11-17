@@ -45,7 +45,9 @@ class _CardScreenState extends State<CardScreen> {
     if (widget.card['pdfUrl'] == null) return null;
     setState(() => _loadingPdf = true);
     try {
-      final bytes = await Session.read(context).api.bytes('/v1/weddings/${widget.weddingId}/card.pdf');
+      final api = Session.read(context).api;
+      final link = asJson(await api.get('/v1/weddings/${widget.weddingId}/card-url'));
+      final bytes = await api.fetch('${link['url']}');
       final dir = await getTemporaryDirectory();
       final f = File('${dir.path}/${'${widget.card['name']}'.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_')}');
       await f.writeAsBytes(bytes, flush: true);

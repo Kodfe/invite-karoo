@@ -2,11 +2,10 @@
 
 The team console (host applications, wedding setup, guest-list import, media, family access,
 support, users, team). Next.js (App Router) built as a **static site** in `out/`, served by
-Firebase Hosting at **https://admin.invitekaroo.com**. There is no server of its own: the browser
+Vercel at **https://admin.invitekaroo.com**. There is no server of its own: the browser
 talks to Firestore and Storage directly (`src/data.ts`), and `firestore.rules` + `storage.rules` decide
-what each team member may do. Team accounts and Excel work are callable functions
-(`functions/src/team/callables.ts`), and notifications follow from the writes in Firestore triggers
-(`functions/src/team/notify.ts`). NestJS is not involved.
+what each team member may do. Team accounts, Excel work and changes that have to tell someone go through
+the API at `NEXT_PUBLIC_API_URL` (`functions/src/team/team.routes.ts`).
 
 ## Run
 
@@ -31,16 +30,20 @@ Pages with an id are static pages that read it from the query string:
 ## Sign-in
 
 Firebase Authentication, **Email/Password** provider (turn it on in the Firebase console).
-Team accounts are created from the **Team** screen (admin role), which calls a function to create the
+Team accounts are created from the **Team** screen (admin role), which asks the API to create the
 Firebase user. After sign-in the dashboard reads the `admins/{uid}` record; an account that is not on
-the team is signed out again. "Forgot password?" sends Firebase's reset email; "My account" changes
+the team is signed out again.
+
+**The first admin**, on a new project: set `ADMIN_EMAIL` and `ADMIN_PASSWORD` on the API, open the
+sign-in page and follow **Create the first admin** (`/setup/`). The page only takes that exact email and
+password, and closes for good once an admin exists. Then remove both values from the API. "Forgot password?" sends Firebase's reset email; "My account" changes
 the password in the browser (re-entering the current one).
 
 Add `admin.invitekaroo.com` under Authentication → Settings → **Authorized domains**.
 
 ## Deploy
 
-Firebase Hosting site with target **`admin`**, `public: "admin/out"`, `cleanUrls` off,
-`trailingSlash: true`, and a fallback `404.html` (already in `out/`). Build with the real
-`NEXT_PUBLIC_*` values first, then `firebase deploy --only hosting:admin`.
-Connect the custom domain under Hosting → `admin` site → Add custom domain → `admin.invitekaroo.com`.
+On Vercel: import the repository, set **Root Directory** to `admin`, add `NEXT_PUBLIC_API_URL` and the
+`NEXT_PUBLIC_FIREBASE_*` values from `.env.example`, and deploy. Add the site's domain under Firebase →
+Authentication → Settings → **Authorized domains** and to the API's `CORS_ORIGINS`, or sign-in and the
+API calls fail.

@@ -1,6 +1,7 @@
 import { col } from '../../db/paths';
 import { byIds, F, getRows, writeAll } from '../../db/store';
 import { NotifAction, User, UserPrefs } from '../../db/models';
+import { later } from '../../common/background';
 import { localParts } from '../../common/time';
 import { PushService } from './push.service';
 
@@ -74,7 +75,7 @@ export class NotificationsService {
       const data: Record<string, string> = { cat: n.cat };
       if (n.action) data.action = JSON.stringify(n.action);
       // push is best effort and must never hold up the request that caused it
-      void this.push.toUsers(pushTo, { title: n.title, body: n.body, data }).catch(() => undefined);
+      later(this.push.toUsers(pushTo, { title: n.title, body: n.body, data }));
     }
     return ids.length;
   }

@@ -1,21 +1,14 @@
+import type request from 'supertest';
 import { col } from '../src/db/paths';
-import { Fn, TicketMessage, Wedding } from '../src/db/models';
+import { Wedding } from '../src/db/models';
 import { FunctionInput, fnValues, liveFunctions } from '../src/db/rows';
-import { F, getDoc, getRows } from '../src/db/store';
+import { F, getRows } from '../src/db/store';
 import { auth } from '../src/common/firebase-auth';
 import { localParts } from '../src/common/time';
-import type { CallableName } from '../src/team/callables';
+import { svc } from '../src/services';
+import { bearer } from './setup';
 
 /* What the dashboard does from the browser, for tests that need a wedding to work on. */
-
-let adminUid = '';
-
-/** a team function, called as the first admin unless a uid (or undefined) is passed */
-export async function teamCall<T = unknown>(name: CallableName, data: unknown, ...as: [string?]): Promise<T> {
-  const { call } = await import('../src/team/callables');
-  adminUid ||= (await auth().getUserByEmail('a@ik.test'))!.uid;
-  return (await call(name, as.length ? as[0] : adminUid, data)) as T;
-}
 
 export async function createWedding(w: Pick<Wedding, 'ownerPhone' | 'contactPhone' | 'city' | 'startDate' | 'endDate' | 'bride' | 'groom' | 'brideFamily' | 'groomFamily'>) {
   const ref = col.weddings().doc();
@@ -32,6 +25,14 @@ export async function addFunction(weddingId: string, f: FunctionInput) {
   return ref.id;
 }
 
+/** the dashboard puts the workbook in Storage, then names it to the API */
+export async function importSheet(http: ReturnType<typeof request>, token: string, weddingId: string, buffer: Buffer, dryRun: boolean) {
+  const { uid } = (await auth().getUserByEmail('a@ik.test'))!;
+  const s = await svc.storage.put(`imports/${uid}`, { buffer, mimetype: 'application/octet-stream', originalname: 'guests.xlsx', size: buffer.length });
+  const r = await http.post(`/v1/team/weddings/${weddingId}/guests/import`).set(bearer(token)).send({ fileKey: s.key, fileName: 'guests.xlsx', dryRun }).expect(200);
+  return r.body;
+}
+
 export async function weddingSummary(weddingId: string) {
   const fns = await liveFunctions(weddingId);
   const invites = await getRows<{ functionId: string; giftOut: boolean }>(col.invites(weddingId).where('invited', '==', true));
@@ -40,29 +41,4 @@ export async function weddingSummary(weddingId: string) {
     guestCount,
     functions: fns.map((f) => ({ id: f.id, name: f.name, start: localParts(f.startsAt).time, giftOut: invites.filter((i) => i.functionId === f.id && i.giftOut).length })),
   };
-}
-
-/** the write, then what the Firestore trigger does with it */
-export async function handover(weddingId: string) {
-  const { weddingChanged } = await import('../src/team/notify');
-  const ref = col.weddings().doc(weddingId);
-  const before = (await getDoc<Wedding>(ref))!;
-  await ref.update({ status: 'active', handedOverAt: F.now(), updatedAt: F.now() });
-  await weddingChanged(before, (await getDoc<Wedding>(ref))!);
-}
-
-export async function moveFunction(weddingId: string, fnId: string, minutes: number) {
-  const { functionChanged } = await import('../src/team/notify');
-  const ref = col.functions(weddingId).doc(fnId);
-  const before = (await getDoc<Fn>(ref))!;
-  await ref.update({ startsAt: new Date(before.startsAt.getTime() + minutes * 60_000), updatedAt: F.now() });
-  await functionChanged(weddingId, before, (await getDoc<Fn>(ref))!);
-}
-
-export async function replyToTicket(ticketId: string, body: string) {
-  const { ticketMessage } = await import('../src/team/notify');
-  const ref = col.ticketMessages(ticketId).doc();
-  await ref.set({ ticketId, author: 'team', adminId: 'team', body, createdAt: F.now() });
-  await col.tickets().doc(ticketId).update({ status: 'answered', unreadForUser: F.inc(1), updatedAt: F.now() });
-  await ticketMessage(ticketId, (await getDoc<TicketMessage>(ref))!);
 }

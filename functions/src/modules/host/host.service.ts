@@ -1,5 +1,4 @@
-import { Injectable } from '@nestjs/common';
-import { AppError, conflict, notFound } from '../../common/errors';
+import { AppError, conflict, notFound } from '../../common/app-error';
 import { prettyPhone, toE164 } from '../../common/phone';
 import { clock12, dayLabel, fnPast, rsvpWindow } from '../../common/time';
 import { col } from '../../db/paths';
@@ -22,7 +21,6 @@ const byName = (a: Guest, b: Guest) => a.name.localeCompare(b.name);
  * The host cannot create or move a function; they run what the team set up —
  * replies, reminders, gifts and family access.
  */
-@Injectable()
 export class HostService {
   constructor(
     private readonly access: HostAccessService,

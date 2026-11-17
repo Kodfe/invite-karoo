@@ -154,6 +154,12 @@ suite('security rules', () => {
       await assertSucceeds(updateDoc(doc(db(setup), `weddings/${WEDDING}/functions/f1`), { deletedAt: serverTimestamp() }));
       await assertFails(deleteDoc(doc(db(setup), `weddings/${WEDDING}/functions/f1`)));
     });
+
+    it('moving a function and handing over go through the API, so people are told', async () => {
+      await assertFails(updateDoc(doc(db(setup), `weddings/${WEDDING}/functions/f1`), { startsAt: new Date() }));
+      await assertFails(updateDoc(doc(db(setup), `weddings/${WEDDING}/functions/f1`), { venueName: 'Elsewhere' }));
+      await assertFails(updateDoc(doc(db(setup), `weddings/${WEDDING}`), { handedOverAt: serverTimestamp() }));
+    });
   });
 
   describe('guests and replies', () => {
@@ -181,12 +187,11 @@ suite('security rules', () => {
   });
 
   describe('support and applications', () => {
-    it('any role replies to a ticket, in its own name', async () => {
+    it('replies go through the API, so the user is always told', async () => {
       const m = (o = {}) => ({ ticketId: 't1', author: 'team', adminId: 'support1', body: 'Hello', createdAt: serverTimestamp(), ...o });
-      await assertSucceeds(setDoc(doc(db(support), 'tickets/t1/messages/m1'), m()));
-      await assertFails(setDoc(doc(db(support), 'tickets/t1/messages/m2'), m({ adminId: 'admin1' })));
-      await assertFails(setDoc(doc(db(support), 'tickets/t1/messages/m3'), m({ author: 'user' })));
+      await assertFails(setDoc(doc(db(support), 'tickets/t1/messages/m1'), m()));
       await assertFails(setDoc(doc(db(appUser), 'tickets/t1/messages/m4'), m({ adminId: 'user1' })));
+      await assertFails(updateDoc(doc(db(support), 'tickets/t1'), { unreadForUser: 1 }));
       await assertSucceeds(updateDoc(doc(db(support), 'tickets/t1'), { status: 'closed', closedAt: serverTimestamp(), updatedAt: serverTimestamp() }));
       await assertFails(updateDoc(doc(db(support), 'tickets/t1'), { userId: 'someone-else' }));
     });
@@ -222,6 +227,12 @@ suite('security rules', () => {
       await assertFails(uploadBytes(ref(st(setup), `weddings/${WEDDING}/voice/x.jpg`), bytes, { contentType: 'image/jpeg' }));
       await assertFails(uploadBytes(ref(st(setup), `weddings/${WEDDING}/couple/big.jpg`), new Uint8Array(10 * 1024 * 1024 + 1), { contentType: 'image/jpeg' }));
       await assertFails(uploadBytes(ref(st(setup), 'applications/user1/x.jpg'), bytes, { contentType: 'image/jpeg' }));
+    });
+
+    it('a guest sheet goes in the uploader\'s own folder', async () => {
+      await assertSucceeds(uploadBytes(ref(st(setup), 'imports/setup1/g.xlsx'), bytes, { contentType: 'text/csv' }));
+      await assertFails(uploadBytes(ref(st(setup), 'imports/admin1/g.xlsx'), bytes, { contentType: 'text/csv' }));
+      await assertFails(uploadBytes(ref(st(support), 'imports/support1/g.xlsx'), bytes, { contentType: 'text/csv' }));
     });
 
     it('only the team reads files directly', async () => {

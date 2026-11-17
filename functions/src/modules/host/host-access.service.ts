@@ -1,5 +1,4 @@
-import { Injectable } from '@nestjs/common';
-import { forbidden, notFound } from '../../common/errors';
+import { forbidden, notFound } from '../../common/app-error';
 import { col } from '../../db/paths';
 import { Access, User, Wedding } from '../../db/models';
 import { getDoc, getRows } from '../../db/store';
@@ -21,7 +20,6 @@ export type HostCtx = {
 };
 
 /** who may run a wedding's console: the owner's number, or a family member the owner added */
-@Injectable()
 export class HostAccessService {
   async require(userId: string, weddingId: string, level: AccessLevel = 'full'): Promise<HostCtx> {
     const [u, w] = await Promise.all([getDoc<User>(col.users().doc(userId)), getDoc<Wedding>(col.weddings().doc(weddingId))]);

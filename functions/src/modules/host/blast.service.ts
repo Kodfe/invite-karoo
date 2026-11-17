@@ -1,6 +1,6 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { later } from '../../common/background';
 import { env } from '../../config/env';
-import { AppError, conflict, notFound } from '../../common/errors';
+import { AppError, conflict, notFound } from '../../common/app-error';
 import { clock12, dayLabel, fnPast } from '../../common/time';
 import { col } from '../../db/paths';
 import { Blast, blastId, Fn, Guest, Invite, Wedding } from '../../db/models';
@@ -23,9 +23,8 @@ type Kind = 'rsvp_request' | 'reminder';
  * Sending runs in the background (a Firestore trigger on the blast, plus a sweep for stuck ones),
  * resumably: each recipient is logged, so a restart mid-blast skips everyone already messaged.
  */
-@Injectable()
 export class BlastService {
-  private readonly log = new Logger('Blast');
+  private readonly log = console;
 
   constructor(
     private readonly access: HostAccessService,
@@ -116,8 +115,9 @@ export class BlastService {
         });
       }
     });
-    // in production a Firestore trigger on the blast sends it; tests send right away
+    // sent after answering; the cron sweep picks up one that stops partway. Tests send right away.
     if (env().NODE_ENV === 'test') await this.process(ctx.w.id, ref.id);
+    else later(this.process(ctx.w.id, ref.id));
     return this.view((await getDoc<Blast>(ref))!);
   }
 

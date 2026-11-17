@@ -15,7 +15,7 @@ const ROLE_HELP: Record<Role, string> = {
 
 export function TeamPage() {
   const { admin } = useAuth();
-  const list = useLoad(() => store.team() as Promise<Member[]>, []);
+  const list = useLoad(() => store.teamMembers() as Promise<Member[]>, []);
   const [edit, setEdit] = useState<Member | 'new' | null>(null);
   const confirm = useConfirm();
   const act = useAction();

@@ -1,9 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
 import Anthropic from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { z } from 'zod/v4';
 import { env } from '../../config/env';
-import { AppError } from '../../common/errors';
+import { AppError } from '../../common/app-error';
 
 export const ScanResult = z.object({
   kind: z.enum(['wedding', 'meeting', 'birthday', 'appointment', 'celebration', 'other']),
@@ -44,9 +43,8 @@ Rules:
 
 const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'] as const;
 
-@Injectable()
 export class AiScanService {
-  private readonly log = new Logger('AiScan');
+  private readonly log = console;
   private client: Anthropic | null = null;
 
   private api() {

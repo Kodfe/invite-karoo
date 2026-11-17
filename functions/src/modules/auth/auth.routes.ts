@@ -1,12 +1,9 @@
-import { Body, Controller, HttpCode, Post } from '@nestjs/common';
-import { ApiTags } from '@nestjs/swagger';
-import { Throttle } from '@nestjs/throttler';
-import { perMinute } from '../../common/throttle';
 import { z } from 'zod';
-import { Zod } from '../../common/zod';
-import { AppError } from '../../common/errors';
+
+import { AppError } from '../../common/app-error';
 import { toE164 } from '../../common/phone';
-import { AuthService } from './auth.service';
+import { perMinute, routes } from '../../common/http';
+import { svc } from '../../services';
 
 const phoneIn = z.object({
   cc: z.string().regex(/^\+\d{1,4}$/).default('+91'),
@@ -32,32 +29,24 @@ export function phoneOrThrow(cc: string, mobile: string) {
   return p;
 }
 
-@ApiTags('auth')
-@Controller('v1/auth')
-export class AuthController {
-  constructor(private readonly auth: AuthService) {}
+export function authRoutes() {
+  const r = routes('/v1/auth', { signedIn: false });
 
   /** Step 1 — send a 4-digit code on WhatsApp */
-  @Post('otp/request')
-  @HttpCode(200)
-  @Throttle({ default: { limit: perMinute(10), ttl: 60_000 } })
-  request(@Body(new Zod(RequestOtp)) b: z.infer<typeof RequestOtp>) {
-    return this.auth.requestOtp(phoneOrThrow(b.cc, b.mobile), b.purpose);
-  }
+  r.post('otp/request', (c) => {
+    const b = c.body(RequestOtp);
+    return svc.auth.requestOtp(phoneOrThrow(b.cc, b.mobile), b.purpose);
+  }, { status: 200, limit: perMinute(10) });
 
   /** Step 2 — check the code. Known number → signed in (a Firebase custom token). New number → signed in if `profile` sent, else a signup ticket. */
-  @Post('otp/verify')
-  @HttpCode(200)
-  @Throttle({ default: { limit: perMinute(20), ttl: 60_000 } })
-  verify(@Body(new Zod(VerifyOtp)) b: z.infer<typeof VerifyOtp>) {
-    return this.auth.verifyOtp(phoneOrThrow(b.cc, b.mobile), b.code, b.profile, b.platform);
-  }
+  r.post('otp/verify', (c) => {
+    const b = c.body(VerifyOtp);
+    return svc.auth.verifyOtp(phoneOrThrow(b.cc, b.mobile), b.code, b.profile, b.platform);
+  }, { status: 200, limit: perMinute(20) });
 
   /** Step 3 (new numbers only) — create the account with the ticket from step 2 */
-  @Post('signup')
-  @HttpCode(200)
-  signup(@Body(new Zod(Signup)) b: z.infer<typeof Signup>) {
-    const { signupTicket, platform, ...p } = b;
-    return this.auth.signupWithTicket(signupTicket, p, platform);
-  }
+  r.post('signup', (c) => {
+    const { signupTicket, platform, ...p } = c.body(Signup);
+    return svc.auth.signupWithTicket(signupTicket, p, platform);
+  }, { status: 200 });
 }
