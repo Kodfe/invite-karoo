@@ -1,6 +1,8 @@
 'use client';
-import { FormEvent, useState } from 'react';
+import NextLink from 'next/link';
+import { FormEvent, useEffect, useState } from 'react';
 import { backend, useAuth } from '../auth';
+import { setupOpen } from '../data';
 import { Btn, ErrorNote, Field, msg, Note } from '../ui';
 
 export function LoginPage() {
@@ -11,6 +13,11 @@ export function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState<string | null>(null);
   const notice = state.phase === 'signedOut' ? state.notice : null;
+  const [firstRun, setFirstRun] = useState(false);
+
+  useEffect(() => {
+    setupOpen().then(setFirstRun, () => {});
+  }, []);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -59,7 +66,13 @@ export function LoginPage() {
         <button type="button" className="linkish login-forgot" onClick={() => void forgot()}>
           Forgot password?
         </button>
-        <p className="login-foot">No account? Ask an admin on the team to add you.</p>
+        {firstRun ? (
+          <Note>
+            No admin yet. <NextLink href="/setup/">Create the first admin</NextLink>
+          </Note>
+        ) : (
+          <p className="login-foot">No account? Ask an admin on the team to add you.</p>
+        )}
       </form>
     </div>
   );

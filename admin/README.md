@@ -32,7 +32,11 @@ Pages with an id are static pages that read it from the query string:
 Firebase Authentication, **Email/Password** provider (turn it on in the Firebase console).
 Team accounts are created from the **Team** screen (admin role), which asks the API to create the
 Firebase user. After sign-in the dashboard reads the `admins/{uid}` record; an account that is not on
-the team is signed out again. "Forgot password?" sends Firebase's reset email; "My account" changes
+the team is signed out again.
+
+**The first admin**, on a new project: set `ADMIN_EMAIL` and `ADMIN_PASSWORD` on the API, open the
+sign-in page and follow **Create the first admin** (`/setup/`). The page only takes that exact email and
+password, and closes for good once an admin exists. Then remove both values from the API. "Forgot password?" sends Firebase's reset email; "My account" changes
 the password in the browser (re-entering the current one).
 
 Add `admin.invitekaroo.com` under Authentication → Settings → **Authorized domains**.

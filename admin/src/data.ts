@@ -136,6 +136,25 @@ async function team(method: string, path: string, body?: Json): Promise<Response
 }
 const teamJson = async <T = any,>(method: string, path: string, body?: Json): Promise<T> => (await (await team(method, path, body)).json()) as T;
 
+/** the one-time first-admin setup: the only API calls made before anyone is signed in */
+async function setupCall<T>(method: 'GET' | 'POST', body?: Json): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}/v1/team/setup`, {
+      method,
+      headers: body ? { 'Content-Type': 'application/json' } : {},
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    throw new ApiError('NETWORK', 'Could not reach the server. Check your connection and try again.', 0);
+  }
+  const j = (await res.json().catch(() => ({}))) as Json;
+  if (!res.ok) throw new ApiError(j.error?.code ?? `HTTP_${res.status}`, j.error?.message ?? `Request failed (${res.status})`, res.status, j.error?.fields);
+  return j as T;
+}
+export const setupOpen = async () => (await setupCall<{ open: boolean }>('GET')).open;
+export const createFirstAdmin = (b: { email: string; name: string; password: string }) => setupCall<{ id: string }>('POST', b);
+
 async function saveDownload(path: string, fallbackName: string) {
   const res = await team('GET', path);
   const name = /filename="?([^";]+)"?/.exec(res.headers.get('Content-Disposition') ?? '')?.[1] ?? fallbackName;

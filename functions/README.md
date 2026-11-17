@@ -26,8 +26,8 @@ writes it directly under `firestore.rules`, which `test/rules.spec.ts` tests on 
    npx firebase-tools deploy --only firestore,storage --project invitekaroo-new
    ```
 
-3. The first dashboard account, once: `ADMIN_EMAIL=… ADMIN_PASSWORD=… FIREBASE_SERVICE_ACCOUNT_JSON=… npm run seed:admin`
-   after `npm run build`.
+3. The first dashboard account, once: open the dashboard's sign-in page and follow **Create the first admin**.
+   It needs `ADMIN_EMAIL` and `ADMIN_PASSWORD` set here, and takes only those.
 
 ## Run the tests
 
@@ -53,6 +53,7 @@ All of these go in the Vercel project's **Environment Variables** (`functions/.e
 | `TEAM_WHATSAPP` | env | the number on "Host a wedding" |
 | `STORAGE_BUCKET` | env | `invitekaroo-new.firebasestorage.app` |
 | `CORS_ORIGINS` | env | the dashboard's addresses, comma separated |
+| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | secret | only for creating the first admin at the dashboard's `/setup/`; remove afterwards |
 
 `npm run seed:admin` only creates the first account when it does not exist.
 

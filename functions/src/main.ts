@@ -13,6 +13,7 @@ import { meRoutes } from './modules/me/me.routes';
 import { notificationRoutes } from './modules/notifications/notifications.routes';
 import { supportRoutes } from './modules/support/support.routes';
 import { uploadRoutes } from './modules/files/files.routes';
+import { setupRoutes } from './team/setup.routes';
 import { teamRoutes } from './team/team.routes';
 
 configRoutes();
@@ -25,6 +26,7 @@ eventRoutes();
 notificationRoutes();
 supportRoutes();
 uploadRoutes();
+setupRoutes();
 teamRoutes();
 cronRoutes();
 
