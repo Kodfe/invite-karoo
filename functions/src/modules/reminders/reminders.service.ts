@@ -4,7 +4,6 @@ import { Fn, Guest, Invite, Wedding } from '../../db/models';
 import { byIds, getRows, isAlreadyExists } from '../../db/store';
 import { NotificationsService } from '../infra/notifications.service';
 import { couple } from '../guest/guest.service';
-import { MeService } from '../me/me.service';
 
 const LOOKAHEAD_MS = 15 * 24 * 3600_000;
 /** a reminder that should have fired more than this long ago is skipped, not sent late */
@@ -19,10 +18,7 @@ const GRACE_MS = 10 * 60_000;
 export class RemindersService {
   private readonly log = console;
 
-  constructor(
-    private readonly notifications: NotificationsService,
-    private readonly me: MeService,
-  ) {}
+  constructor(private readonly notifications: NotificationsService) {}
 
   async tick(now = new Date()) {
     try {

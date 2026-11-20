@@ -1,5 +1,5 @@
 /**
- * The little the REST API needs from a web server: a route table, sign-in, rate limits, request
+ * The little the API needs from a web server: a route table, sign-in, rate limits, request
  * bodies and one error shape. No framework: it runs as a Vercel Function (api/index.ts), and under
  * plain node:http locally and in tests.
  *

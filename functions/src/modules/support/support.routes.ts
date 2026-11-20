@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import type { UserClaims } from '../../common/auth';
 import { AppError, notFound } from '../../common/app-error';
 import { zUuid } from '../../common/zod';
 import { col } from '../../db/paths';

@@ -312,7 +312,6 @@ class FBatch implements Batch {
 
 class FTx implements Tx {
   ops: Op[] = [];
-  constructor(private readonly fs: FakeFirestore) {}
   private noWritesYet() {
     if (this.ops.length) throw new Error('Firestore transactions require all reads to be executed before all writes.');
   }
@@ -379,7 +378,7 @@ export class FakeFirestore implements Db {
   }
   runTransaction<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
     const run = async () => {
-      const tx = new FTx(this);
+      const tx = new FTx();
       const out = await fn(tx);
       this.apply(tx.ops);
       return out;

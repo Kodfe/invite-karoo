@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import type { UserClaims } from '../../common/auth';
 import { zUuid } from '../../common/zod';
 import { routes } from '../../common/http';
 import { svc } from '../../services';

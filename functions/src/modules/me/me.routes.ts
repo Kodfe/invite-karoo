@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import type { UserClaims } from '../../common/auth';
 import { AppError } from '../../common/app-error';
 import { zTime } from '../../common/zod';
 import { col } from '../../db/paths';
