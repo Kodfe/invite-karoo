@@ -12,6 +12,9 @@ export function testEnv() {
     DEV_OTP: '1234',
     OTP_SECRET: 'test-otp-secret',
     CRON_SECRET: 'test-cron-secret',
+    // the tests also run inside the Vercel build, where the project's real values are set
+    CORS_ORIGINS: 'https://invite-karoo.vercel.app,https://admin.invitekaroo.com',
+    PUBLIC_URL: 'https://api.invitekaroo.com',
     WHATSAPP_PROVIDER: 'console',
     STORAGE_DRIVER: 'local',
     UPLOAD_DIR: '/tmp/ik-test-uploads',

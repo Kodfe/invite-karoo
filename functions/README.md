@@ -24,7 +24,8 @@ writes it directly under `firestore.rules`, which `test/rules.spec.ts` tests on 
 1. Vercel: one project on this repository with **Root Directory** `functions`, Framework Preset **Other**,
    and **Include files outside the root directory** on (the build reads `../admin`). Set the variables
    below, plus the dashboard's `NEXT_PUBLIC_FIREBASE_*` values from `admin/.env.example`. Needs Vercel Pro
-   for the every-minute cron.
+   for the every-minute cron. Each deploy runs `npm run typecheck` and `npm test` first, and stops if either
+   fails: there is no other CI.
 2. Firebase rules and indexes, with your own Google login (not the service account):
 
    ```bash

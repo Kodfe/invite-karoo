@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Runs in CI right after `flutter create`, and patches the generated android/ and ios/
+Runs right after `flutter create` (see app/README.md), and patches the generated android/ and ios/
 folders for Invite Karoo. Safe to run more than once.
 
   python3 tool/prepare_platforms.py [--push]
