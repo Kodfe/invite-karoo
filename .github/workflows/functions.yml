@@ -1,9 +1,9 @@
 name: API
 
-# The API (Cloud Functions) tests, twice: against the in-memory store, and against the real
-# Firestore + Auth emulators.
+# The API tests, twice: against the in-memory store, and against the real Firebase emulators
+# (Firestore, Auth, Storage), which also test firestore.rules and storage.rules.
 permissions:
-  contents: write   # only to save the test log on the ci-logs-api branch
+  contents: read
 
 on:
   push:
@@ -42,12 +42,11 @@ jobs:
           set -o pipefail
           npx --yes firebase-tools@latest emulators:exec --only firestore,auth,storage --project demo-invitekaroo "npm --prefix functions test" 2>&1 | tee ci-emulator-tests.txt
 
-      - name: Save the log for review
+      - name: Save the logs for review
         if: always()
-        working-directory: .
-        run: |
-          mkdir -p "$RUNNER_TEMP/logs" && cp ci-*.txt "$RUNNER_TEMP/logs/" 2>/dev/null || true
-          echo "run ${{ github.run_number }} · ${{ github.sha }} · ${{ job.status }}" > "$RUNNER_TEMP/logs/STATUS.txt"
-          cd "$RUNNER_TEMP/logs" && git init -q -b logs && git config user.name ci && git config user.email ci@invitekaroo.local
-          git add -A && git commit -qm "Test log, run ${{ github.run_number }}"
-          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" logs:ci-logs-api
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-logs-${{ github.job }}-${{ github.run_number }}
+          path: ci-*.txt
+          if-no-files-found: ignore
+          retention-days: 14
