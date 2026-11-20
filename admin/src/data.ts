@@ -115,7 +115,8 @@ async function wedding(id: string) {
 
 /* ───────── the API ───────── */
 
-const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.invitekaroo.com').replace(/\/$/, '');
+/** empty: the API is on this site's own address (one Vercel project serves both) */
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/$/, '');
 
 async function team(method: string, path: string, body?: Json): Promise<Response> {
   const token = await getAuth(firebase().app).currentUser?.getIdToken();

@@ -60,3 +60,5 @@ ui-debug.log
 
 # vercel
 .vercel/
+# the admin site copied in by functions/vercel.json
+functions/public/

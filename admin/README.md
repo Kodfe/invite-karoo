@@ -43,7 +43,10 @@ Add `admin.invitekaroo.com` under Authentication → Settings → **Authorized d
 
 ## Deploy
 
-On Vercel: import the repository, set **Root Directory** to `admin`, add `NEXT_PUBLIC_API_URL` and the
-`NEXT_PUBLIC_FIREBASE_*` values from `.env.example`, and deploy. Add the site's domain under Firebase →
-Authentication → Settings → **Authorized domains** and to the API's `CORS_ORIGINS`, or sign-in and the
-API calls fail.
+The API's Vercel project builds and serves this site too (see `functions/README.md`), so the dashboard and
+the API share one address and `NEXT_PUBLIC_API_URL` stays empty. Set the `NEXT_PUBLIC_FIREBASE_*` values from
+`.env.example` on that project, and add its domain under Firebase → Authentication → Settings →
+**Authorized domains**, or sign-in fails.
+
+To host the site on its own instead (Root Directory `admin`, using `vercel.json` here), set
+`NEXT_PUBLIC_API_URL` to the API's address and add this site's address to the API's `CORS_ORIGINS`.

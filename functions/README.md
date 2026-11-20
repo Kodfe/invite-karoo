@@ -4,6 +4,9 @@ The code runs as one **Vercel Function** (`api/index.ts`, region `bom1`), with n
 route table in `src/common/http.ts` and routes in `src/modules/*/*.routes.ts`. The data lives in **Firebase**:
 Firestore, Firebase Auth, Storage and FCM, reached with a service account.
 
+One Vercel project serves both the API and the Admin Dashboard: `vercel.json` builds `../admin` into
+`public/` as static pages and sends `/v1/*` to the function. The dashboard calls the API on its own address.
+
 | What | Where |
 | --- | --- |
 | The app's API | `/v1/...`, signed-in users |
@@ -18,7 +21,10 @@ writes it directly under `firestore.rules`, which `test/rules.spec.ts` tests on 
 
 ## Deploy
 
-1. Vercel: a project on this repository with **Root Directory** `functions`. Set the variables below.
+1. Vercel: one project on this repository with **Root Directory** `functions`, Framework Preset **Other**,
+   and **Include files outside the root directory** on (the build reads `../admin`). Set the variables
+   below, plus the dashboard's `NEXT_PUBLIC_FIREBASE_*` values from `admin/.env.example`. Needs Vercel Pro
+   for the every-minute cron.
 2. Firebase rules and indexes, with your own Google login (not the service account):
 
    ```bash
@@ -52,7 +58,7 @@ All of these go in the Vercel project's **Environment Variables** (`functions/.e
 | `WHATSAPP_PROVIDER`, `WHATSAPP_PHONE_NUMBER_ID`, `WA_TEMPLATE_*` | env | WhatsApp sending (`console` logs instead) |
 | `TEAM_WHATSAPP` | env | the number on "Host a wedding" |
 | `STORAGE_BUCKET` | env | `invitekaroo-new.firebasestorage.app` |
-| `CORS_ORIGINS` | env | the dashboard's addresses, comma separated |
+| `CORS_ORIGINS` | env | only for a dashboard on another address; not needed when one project serves both |
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD` | secret | only for creating the first admin at the dashboard's `/setup/`; remove afterwards |
 
 `npm run seed:admin` only creates the first account when it does not exist.
