@@ -35,5 +35,5 @@ export const svc = {
   auth: new AuthService(whatsapp, me),
   host: new HostService(access, notifications, audit),
   blasts: new BlastService(access, whatsapp, notifications),
-  reminders: new RemindersService(notifications, me),
+  reminders: new RemindersService(notifications),
 };

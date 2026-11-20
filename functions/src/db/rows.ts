@@ -1,4 +1,4 @@
-/** New rows and small helpers shared by the REST API and the team functions. */
+/** New rows and small helpers shared by the app's routes and the team's. */
 import { randomToken } from '../common/crypto';
 import { zonedDate } from '../common/time';
 import { Fn, Guest, Wedding } from './models';

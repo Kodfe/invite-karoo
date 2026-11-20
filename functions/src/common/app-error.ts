@@ -1,6 +1,6 @@
 /**
  * An error fit to show a person. `code` is stable and meant for clients; `message` is human
- * readable English. Plain on purpose: the team functions use it without loading the REST API.
+ * readable English.
  */
 export class AppError extends Error {
   constructor(

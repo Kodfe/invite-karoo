@@ -33,7 +33,7 @@ cronRoutes();
 /** the API. api/index.ts hands it to Vercel; `createServer(handle)` runs it anywhere else. */
 export { handle };
 
-/** local run outside Cloud Functions: npm run dev */
+/** local run: npm run dev */
 if (require.main === module) {
   createServer(handle).listen(env().PORT, '0.0.0.0', () => console.log(`Invite Karoo API on :${env().PORT} (${env().NODE_ENV})`));
 }

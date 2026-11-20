@@ -105,7 +105,7 @@ describe('admin builds the wedding', () => {
   it('logs in', async () => {
     await expect(passwordSignIn('a@ik.test', 'wrong')).rejects.toThrow();
     adminToken = await passwordSignIn('a@ik.test', 'password-123');
-    // the REST API has no team routes; the dashboard works in Firestore under the rules
+    // the old /v1/admin routes are gone: the dashboard works in Firestore and under /v1/team
     await http.get('/v1/admin/stats').set(bearer(adminToken)).expect(404);
     // and a team token is not an app user's token
     await http.get('/v1/me').set(bearer(adminToken)).expect(401);

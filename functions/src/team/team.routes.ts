@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { conflict, AppError, notFound } from '../common/app-error';
 import { auth } from '../common/firebase-auth';
 import { routes } from '../common/http';
-import { zDate, zId, zTime } from '../common/zod';
+import { zDate, zTime } from '../common/zod';
 import { Admin, AdminRole } from '../db/models';
 import { col } from '../db/paths';
 import { F, getDoc } from '../db/store';

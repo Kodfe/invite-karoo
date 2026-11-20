@@ -4,11 +4,14 @@ The code runs as one **Vercel Function** (`api/index.ts`, region `bom1`), with n
 route table in `src/common/http.ts` and routes in `src/modules/*/*.routes.ts`. The data lives in **Firebase**:
 Firestore, Firebase Auth, Storage and FCM, reached with a service account.
 
+One Vercel project serves both the API and the Admin Dashboard: `vercel.json` builds `../admin` into
+`public/` as static pages and sends `/v1/*` to the function. The dashboard calls the API on its own address.
+
 | What | Where |
 | --- | --- |
 | The app's API | `/v1/...`, signed-in users |
 | The dashboard's API | `/v1/team/...`: team accounts, Excel work, and changes that must tell someone |
-| Reminders and stuck WhatsApp sends | Vercel Cron calls `/v1/cron/minute` every minute (`vercel.json`). Needs Vercel Pro. |
+| Reminders and stuck WhatsApp sends | `/v1/cron/minute`, which an outside timer must call every minute (below) |
 
 A Vercel request or response can be at most 4.5 MB, so large files skip the API: the app PUTs them to a link
 from `/v1/uploads`, the dashboard uses the Storage SDK, and card PDFs are fetched from a link (`card-url`).
@@ -18,7 +21,10 @@ writes it directly under `firestore.rules`, which `test/rules.spec.ts` tests on 
 
 ## Deploy
 
-1. Vercel: a project on this repository with **Root Directory** `functions`. Set the variables below.
+1. Vercel: one project on this repository with **Root Directory** `functions`, Framework Preset **Other**,
+   and **Include files outside the root directory** on (the build reads `../admin`). Set the variables
+   below, plus the dashboard's `NEXT_PUBLIC_FIREBASE_*` values from `admin/.env.example`. Each deploy runs `npm run typecheck` and `npm test` first, and stops if either
+   fails: there is no other CI.
 2. Firebase rules and indexes, with your own Google login (not the service account):
 
    ```bash
@@ -26,7 +32,10 @@ writes it directly under `firestore.rules`, which `test/rules.spec.ts` tests on 
    npx firebase-tools deploy --only firestore,storage --project invitekaroo-new
    ```
 
-3. The first dashboard account, once: open the dashboard's sign-in page and follow **Create the first admin**.
+3. The minute timer: at cron-job.org (free) or similar, call `GET https://YOUR-ADDRESS/v1/cron/minute` every
+   minute with the header `Authorization: Bearer <CRON_SECRET>`. Without it no reminder is ever sent. On Vercel Pro
+   a `crons` entry in `vercel.json` can do this instead.
+4. The first dashboard account, once: open the dashboard's sign-in page and follow **Create the first admin**.
    It needs `ADMIN_EMAIL` and `ADMIN_PASSWORD` set here, and takes only those.
 
 ## Run the tests
@@ -44,7 +53,7 @@ All of these go in the Vercel project's **Environment Variables** (`functions/.e
 | Name | Kind | What |
 | --- | --- | --- |
 | `FIREBASE_SERVICE_ACCOUNT_JSON` | secret | the service account key, on one line |
-| `CRON_SECRET` | secret | long random string; Vercel Cron sends it to `/v1/cron/minute` |
+| `CRON_SECRET` | secret | long random string; the minute timer sends it to `/v1/cron/minute` |
 | `OTP_SECRET` | secret | long random string; salts the WhatsApp code hashes |
 | `WHATSAPP_TOKEN` | secret | Meta WhatsApp Cloud API token (when `WHATSAPP_PROVIDER=meta`) |
 | `ANTHROPIC_API_KEY` | secret | the AI card scan |
@@ -52,7 +61,7 @@ All of these go in the Vercel project's **Environment Variables** (`functions/.e
 | `WHATSAPP_PROVIDER`, `WHATSAPP_PHONE_NUMBER_ID`, `WA_TEMPLATE_*` | env | WhatsApp sending (`console` logs instead) |
 | `TEAM_WHATSAPP` | env | the number on "Host a wedding" |
 | `STORAGE_BUCKET` | env | `invitekaroo-new.firebasestorage.app` |
-| `CORS_ORIGINS` | env | the dashboard's addresses, comma separated |
+| `CORS_ORIGINS` | env | only for a dashboard on another address; not needed when one project serves both |
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD` | secret | only for creating the first admin at the dashboard's `/setup/`; remove afterwards |
 
 `npm run seed:admin` only creates the first account when it does not exist.
