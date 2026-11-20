@@ -11,7 +11,7 @@ One Vercel project serves both the API and the Admin Dashboard: `vercel.json` bu
 | --- | --- |
 | The app's API | `/v1/...`, signed-in users |
 | The dashboard's API | `/v1/team/...`: team accounts, Excel work, and changes that must tell someone |
-| Reminders and stuck WhatsApp sends | Vercel Cron calls `/v1/cron/minute` every minute (`vercel.json`). Needs Vercel Pro. |
+| Reminders and stuck WhatsApp sends | `/v1/cron/minute`, which an outside timer must call every minute (below) |
 
 A Vercel request or response can be at most 4.5 MB, so large files skip the API: the app PUTs them to a link
 from `/v1/uploads`, the dashboard uses the Storage SDK, and card PDFs are fetched from a link (`card-url`).
@@ -23,8 +23,7 @@ writes it directly under `firestore.rules`, which `test/rules.spec.ts` tests on 
 
 1. Vercel: one project on this repository with **Root Directory** `functions`, Framework Preset **Other**,
    and **Include files outside the root directory** on (the build reads `../admin`). Set the variables
-   below, plus the dashboard's `NEXT_PUBLIC_FIREBASE_*` values from `admin/.env.example`. Needs Vercel Pro
-   for the every-minute cron. Each deploy runs `npm run typecheck` and `npm test` first, and stops if either
+   below, plus the dashboard's `NEXT_PUBLIC_FIREBASE_*` values from `admin/.env.example`. Each deploy runs `npm run typecheck` and `npm test` first, and stops if either
    fails: there is no other CI.
 2. Firebase rules and indexes, with your own Google login (not the service account):
 
@@ -33,7 +32,10 @@ writes it directly under `firestore.rules`, which `test/rules.spec.ts` tests on 
    npx firebase-tools deploy --only firestore,storage --project invitekaroo-new
    ```
 
-3. The first dashboard account, once: open the dashboard's sign-in page and follow **Create the first admin**.
+3. The minute timer: at cron-job.org (free) or similar, call `GET https://YOUR-ADDRESS/v1/cron/minute` every
+   minute with the header `Authorization: Bearer <CRON_SECRET>`. Without it no reminder is ever sent. On Vercel Pro
+   a `crons` entry in `vercel.json` can do this instead.
+4. The first dashboard account, once: open the dashboard's sign-in page and follow **Create the first admin**.
    It needs `ADMIN_EMAIL` and `ADMIN_PASSWORD` set here, and takes only those.
 
 ## Run the tests
@@ -51,7 +53,7 @@ All of these go in the Vercel project's **Environment Variables** (`functions/.e
 | Name | Kind | What |
 | --- | --- | --- |
 | `FIREBASE_SERVICE_ACCOUNT_JSON` | secret | the service account key, on one line |
-| `CRON_SECRET` | secret | long random string; Vercel Cron sends it to `/v1/cron/minute` |
+| `CRON_SECRET` | secret | long random string; the minute timer sends it to `/v1/cron/minute` |
 | `OTP_SECRET` | secret | long random string; salts the WhatsApp code hashes |
 | `WHATSAPP_TOKEN` | secret | Meta WhatsApp Cloud API token (when `WHATSAPP_PROVIDER=meta`) |
 | `ANTHROPIC_API_KEY` | secret | the AI card scan |

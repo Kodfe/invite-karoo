@@ -17,12 +17,6 @@
       "maxDuration": 300
     }
   },
-  "crons": [
-    {
-      "path": "/v1/cron/minute",
-      "schedule": "* * * * *"
-    }
-  ],
   "headers": [
     {
       "source": "/_next/static/(.*)",

@@ -7,7 +7,7 @@ Every wedding invitation, every function, one place.
 | Part | Runs on |
 | --- | --- |
 | The API and the Admin Dashboard | **Vercel**, one project (Root Directory `functions`), one address |
-| Reminders and WhatsApp sending | **Vercel Cron**, every minute |
+| Reminders and WhatsApp sending | `/v1/cron/minute`, called every minute by an outside timer (e.g. cron-job.org) |
 | Data | **Firebase**: Firestore (database), Firebase Auth (sign-in), Storage (files), Cloud Messaging (push) |
 | The phone app | built on a computer with Flutter; see `app/README.md` |
 
