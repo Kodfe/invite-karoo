@@ -1,4 +1,4 @@
-import { App, cert, getApps, initializeApp } from 'firebase-admin/app';
+import { App, cert, getApps, initializeApp, ServiceAccount } from 'firebase-admin/app';
 import { env } from '../../config/env';
 
 export const usingEmulators = () => !!process.env.FIRESTORE_EMULATOR_HOST || !!process.env.FIREBASE_AUTH_EMULATOR_HOST;
@@ -7,9 +7,15 @@ export const usingEmulators = () => !!process.env.FIRESTORE_EMULATOR_HOST || !!p
 export function adminApp(): App {
   const existing = getApps();
   if (existing.length) return existing[0];
-  const json = env().FIREBASE_SERVICE_ACCOUNT_JSON;
+  // pasted into a dashboard, the key sometimes keeps the quotes it had in a .env file
+  const json = env().FIREBASE_SERVICE_ACCOUNT_JSON.trim().replace(/^'([\s\S]*)'$/, '$1');
   if (json) {
-    const sa = JSON.parse(json);
+    let sa: ServiceAccount & { project_id?: string };
+    try {
+      sa = JSON.parse(json);
+    } catch {
+      throw new Error('FIREBASE_SERVICE_ACCOUNT_JSON is not valid JSON: paste the whole key file, starting with { and ending with }');
+    }
     return initializeApp({ credential: cert(sa), projectId: sa.project_id, storageBucket: env().STORAGE_BUCKET || `${sa.project_id}.firebasestorage.app` });
   }
   return initializeApp({
